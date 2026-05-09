@@ -25,7 +25,7 @@ cargo install keel
 Or from source:
 
 ```bash
-git clone https://github.com/SuperInstance/keel.git
+git clone https://github.com/SuperInstance/keel — part of the [SuperInstance fleet](https://github.com/SuperInstance/SuperInstance).git
 cd keel
 cargo install --path .
 ```
