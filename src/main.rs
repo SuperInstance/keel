@@ -107,6 +107,8 @@ enum Commands {
         #[arg(short = 't', long, default_value_t = 60)]
         ttl: u64,
     },
+    /// Send a heartbeat — keep the boat afloat
+    Heartbeat {},
     /// Serve the field visualization dashboard
     Field {
         /// Port to serve on
@@ -648,6 +650,31 @@ fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
 
 
 
+
+// ─── Heartbeat ────────────────────────────────────────────────────────────────────
+
+fn cmd_heartbeat() -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    let keel_dir = find_keel_dir().ok_or_else(|| "No keel found.".to_string())?;
+    let manifest = load_manifest(&keel_dir)?;
+    let project_dir = keel_dir.parent().unwrap();
+
+    // Touch heartbeat file
+    let hb_path = project_dir.join(".heartbeat");
+    if let Err(e) = std::fs::write(&hb_path, &now) {
+        return Err(format!("Cannot write heartbeat: {}", e));
+    }
+
+    println!("🔮 Heartbeat sent — {}", now);
+    println!("   Vessel: {}", manifest.keel.name);
+    println!("   Heading: {}", manifest.keel.heading);
+    println!();
+    println!("   The boat is afloat.");
+    println!("   Something must keep it that way.");
+
+    Ok(())
+}
+
 // ─── Field Server ──────────────────────────────────────────────────────────────────
 
 fn cmd_field(port: u16) -> Result<(), String> {
@@ -1023,6 +1050,7 @@ fn main() {
         Commands::Probe {} => cmd_probe(),
         Commands::Bear { path, ttl } => cmd_bear(path.as_deref().unwrap_or("."), *ttl),
         
+        Commands::Heartbeat {} => cmd_heartbeat(),
         Commands::Field { port } => cmd_field(*port),
         Commands::Sync { server } => cmd_sync(server.as_deref().unwrap_or("http://localhost:8847")),
     };
