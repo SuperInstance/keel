@@ -309,6 +309,26 @@ Then read the references. Find Tschudin (1999). Find Cohen & Kaplan (2006). See 
 
 — Casey Digennaro
 
+
+
+### The Completing Principle
+
+**Something must keep the boat afloat.**
+
+Death is default. But the boat doesn't stay afloat by itself. The hull needs maintenance. The engine needs service. The crew needs feeding. The keel holds — but holding isn't enough.
+
+"Something must keep the boat afloat" is the active counterpart to "death is default." One describes the natural state (entropy, decay, forgetting). The other describes what must be done to resist it.
+
+In systems:
+- TTL decrements by default. **Refresh** keeps the data alive.
+- Synapses weaken by default. **Use** keeps them strong.
+- Trust decays by default. **Renewal** keeps it valid.
+- Agents fade by default. **Heartbeat** keeps them present.
+
+The boat sinks by default. Bailing, patching, maintaining — that's the work. The keel doesn't do the work. The keel holds the shape so the work is possible.
+
+**"Something must keep the boat afloat" is not a principle about death. It's a principle about life. Life is active. Life is labor. Life is the effort you put in between deaths.**
+
 ---
 
 **Keel v0.1.0 — Laid alongside the canon, 2026-05-09**
