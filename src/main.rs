@@ -98,6 +98,14 @@ enum Commands {
     },
     /// Probe hardware — discover the constraints of your physical environment
     Probe {},
+    /// Scan bearing rates between agents — detect collision courses
+    Bear {
+        /// Path to scan for .heading files (default: current dir)
+        path: Option<String>,
+        /// TTL in seconds before a bearing expires
+        #[arg(short = 't', long, default_value_t = 60)]
+        ttl: u64,
+    },
     /// Sync build record to PLATO — share with the fleet
     Sync {
         /// Optional PLATO server URL
@@ -552,6 +560,86 @@ fn cmd_launch(message: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+
+// ─── Bearing Scan ─────────────────────────────────────────────────────────────────
+
+fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
+    use std::collections::HashMap;
+    use std::fs;
+    use std::time::SystemTime;
+
+    let mut agents: HashMap<String, (f64, f64, SystemTime)> = HashMap::new();
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if !fname.ends_with(".heading") { continue; }
+            if let Ok(content) = fs::read_to_string(entry.path()) {
+                let parts: Vec<&str> = content.trim().split('|').collect();
+                if parts.len() >= 3 {
+                    if let (Ok(angle), Ok(rate)) = (parts[1].trim().parse(), parts[2].trim().parse()) {
+                        if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
+                            agents.insert(parts[0].trim().to_string(), (angle, rate, mtime));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if agents.is_empty() {
+        println!("🔮 No .heading files found in '{}'", path);
+        println!("   Create: echo 'researching|0.5|0.01' > agent.heading");
+        return Ok(());
+    }
+
+    let now = SystemTime::now();
+    let names: Vec<String> = agents.keys().cloned().collect();
+    let mut warnings = 0;
+
+    println!("🔮 Bearing-Rate Scan");
+    println!("   Agents found: {}", names.len());
+    println!();
+    println!("   {:<12} {:<12} {:<10} {:<8} {}", "Agent A", "Agent B", "Status", "Angle", "Age");
+    println!("   {:-<12} {:-<12} {:-<10} {:-<8} {:-<}", "", "", "", "", "");
+
+    for i in 0..names.len() {
+        for j in (i + 1)..names.len() {
+            let a = &names[i];
+            let b = &names[j];
+            if let (Some(&(angle_a, _, mtime_a)), Some(&(angle_b, _, mtime_b))) = (agents.get(a), agents.get(b)) {
+                let angle_diff = (angle_a - angle_b).abs();
+                let age_a = now.duration_since(mtime_a).map(|d| d.as_secs()).unwrap_or(0);
+                let age_b = now.duration_since(mtime_b).map(|d| d.as_secs()).unwrap_or(0);
+                let max_age = age_a.max(age_b);
+                let rate = if max_age > 0 { angle_diff / max_age as f64 } else { 0.0 };
+
+                let (icon, status) = if max_age > ttl_secs {
+                    warnings += 1;
+                    ("🔴", "CRITICAL")
+                } else if rate < 0.001 && angle_diff < 0.5 {
+                    warnings += 1;
+                    ("🟡", "WARNING")
+                } else {
+                    ("🟢", "STABLE")
+                };
+
+                println!("   {:<12} {:<12} {} {:<8.4}  {}s", a, b, icon, angle_diff, max_age);
+            }
+        }
+    }
+
+    println!();
+    if warnings > 0 {
+        println!("   {} collision warning(s) detected.", warnings);
+        println!("   \"If the bearing isn't changing, you're on a collision course.\"");
+    } else {
+        println!("   All clear. Agents maintaining distinct headings.");
+    }
+
+    Ok(())
+}
+
+
 // ─── PLATO Sync ───────────────────────────────────────────────────────────────────
 
 fn cmd_sync(server: &str) -> Result<(), String> {
@@ -919,6 +1007,8 @@ fn main() {
         Commands::Refit { component, reason } => cmd_refit(component, reason),
         Commands::Launch { message } => cmd_launch(message.clone()),
         Commands::Probe {} => cmd_probe(),
+        Commands::Bear { path, ttl } => cmd_bear(path.as_deref().unwrap_or("."), *ttl),
+        
         Commands::Sync { server } => cmd_sync(server.as_deref().unwrap_or("http://localhost:8847")),
     };
 
