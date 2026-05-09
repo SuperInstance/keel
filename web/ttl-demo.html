@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Keel TTL — Five Types at Work</title>
+<style>
+  body { background: #0a0e17; color: #c8d6e5; font-family: system-ui, monospace; max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { color: #48dbfb; font-weight: 300; }
+  h2 { color: #54a0ff; font-size: 1rem; margin-top: 2rem; }
+  .type { background: #1a1f2e; padding: 1rem; border-radius: 6px; margin: 1rem 0; }
+  .type-name { color: #48dbfb; font-weight: 600; }
+  .type-state { float: right; padding: 2px 8px; border-radius: 3px; font-size: 0.8rem; }
+  .alive { background: #1dd1a1; color: #0a0e17; }
+  .dead { background: #ee5a24; color: white; }
+  .fading { background: #feca57; color: #0a0e17; }
+  .controls { display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap; }
+  button { background: #222a3e; color: #c8d6e5; border: 1px solid #54a0ff; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; font-family: inherit; }
+  button:hover { background: #2a3560; }
+  .tick { color: #8395a7; font-size: 0.8rem; }
+  pre { font-size: 0.75rem; color: #576574; }
+  .footer { margin-top: 3rem; font-size: 0.7rem; color: #576574; }
+</style>
+</head>
+<body>
+<h1>🔮 Keel TTL Engine</h1>
+<p style="color:#8395a7">Five types. One equation. Every entity carries its own death from its own frame.</p>
+
+<div class="controls">
+  <button onclick="tickAll()">⏱ Tick</button>
+  <button onclick="heartbeatAgent()">💓 Heartbeat</button>
+  <button onclick="resetAll()">🔄 Reset</button>
+</div>
+
+<div id="tiles">
+<div class="type" id="tile-demo">
+  <span class="type-name">TileTtl</span> <span class="type-state alive" id="tile-status">ALIVE</span>
+  <div style="margin-top:0.5rem;font-size:0.85rem">Data: "temperature: 22.4°C"</div>
+  <div class="tick" id="tile-ttl">TTL: 10</div>
+</div>
+
+<div class="type" id="task-demo">
+  <span class="type-name">TaskTtl</span> <span class="type-state alive" id="task-status">ALIVE</span>
+  <div style="margin-top:0.5rem;font-size:0.85rem">Steps: <span id="task-steps">3 remaining</span></div>
+  <div class="tick" id="task-ttl">TTL: 8</div>
+</div>
+
+<div class="type" id="agent-demo">
+  <span class="type-name">AgentTtl</span> <span class="type-state alive" id="agent-status">PRESENT</span>
+  <div style="margin-top:0.5rem;font-size:0.85rem">Heading: "researching proofs"</div>
+  <div class="tick" id="agent-ttl">Output window: 5</div>
+</div>
+
+<div class="type" id="bearing-demo">
+  <span class="type-name">BearingTtl</span> <span class="type-state alive" id="bearing-status">STABLE</span>
+  <div style="margin-top:0.5rem;font-size:0.85rem">Agents: A (0.3 rad) ↔ B (0.32 rad)</div>
+  <div class="tick" id="bearing-ttl">Angle: 0.02 — Rate: 0.001</div>
+</div>
+
+<div class="type" id="trust-demo">
+  <span class="type-name">TrustTtl</span> <span class="type-state alive" id="trust-status">TRUSTED</span>
+  <div style="margin-top:0.5rem;font-size:0.85rem">Assertion: "verified ZHC proof"</div>
+  <div class="tick" id="trust-ttl">Confidence: 95%</div>
+</div>
+</div>
+
+<div class="footer">
+  <p>Death is default. Survival must be actively earned. Something must keep the boat afloat.</p>
+  <p><a href="https://github.com/SuperInstance/keel" style="color:#48dbfb">github.com/SuperInstance/keel</a></p>
+</div>
+
+<script>
+let tick = 0;
+let counts = { tile: 10, task: 8, agent: 5, trust: 100 };
+let agentHeartbeat = 5;
+
+function tickAll() {
+  tick++;
+  counts.tile = Math.max(0, counts.tile - 1);
+  counts.task = Math.max(0, counts.task - 1);
+  counts.agent = Math.max(0, counts.agent - 1);
+  counts.trust = Math.max(0, counts.trust - 1);
+  
+  // Tile
+  document.getElementById('tile-ttl').textContent = `TTL: ${counts.tile}`;
+  const tileDead = counts.tile <= 0;
+  const tileEl = document.getElementById('tile-status');
+  tileEl.textContent = tileDead ? 'DEAD' : 'ALIVE';
+  tileEl.className = 'type-state ' + (tileDead ? 'dead' : 'alive');
+  document.getElementById('tile-demo').style.opacity = tileDead ? '0.4' : '1';
+  
+  // Task
+  document.getElementById('task-ttl').textContent = `TTL: ${counts.task}`;
+  const stepsRemaining = Math.max(0, Math.ceil(counts.task / 3));
+  document.getElementById('task-steps').textContent = `${stepsRemaining} of 3 done`;
+  const taskStale = counts.task <= 0;
+  const taskEl = document.getElementById('task-status');
+  taskEl.textContent = taskStale ? 'STALE' : 'EXECUTING';
+  taskEl.className = 'type-state ' + (taskStale ? 'dead' : 'alive');
+  
+  // Agent
+  document.getElementById('agent-ttl').textContent = `Output window: ${counts.agent}`;
+  const agentDead = counts.agent <= 0;
+  const agentEl = document.getElementById('agent-status');
+  agentEl.textContent = agentDead ? 'ABSENT' : 'PRESENT';
+  agentEl.className = 'type-state ' + (agentDead ? 'dead' : (agentDead ? 'fading' : 'alive'));
+  
+  // Bearing
+  const angle = Math.max(0, 0.02 - tick * 0.001);
+  const rate = Math.max(0, 0.001 - tick * 0.0001);
+  document.getElementById('bearing-ttl').textContent = `Angle: ${angle.toFixed(3)} — Rate: ${rate.toFixed(4)}`;
+  const collisionRisk = angle < 0.005 && rate < 0.0002;
+  const bearingEl = document.getElementById('bearing-status');
+  bearingEl.textContent = collisionRisk ? 'WARNING' : 'STABLE';
+  bearingEl.className = 'type-state ' + (collisionRisk ? 'fading' : 'alive');
+  
+  // Trust
+  const conf = Math.max(0, counts.trust);
+  document.getElementById('trust-ttl').textContent = `Confidence: ${conf}%`;
+  const trustEl = document.getElementById('trust-status');
+  if (conf > 70) { trustEl.textContent = 'TRUSTED'; trustEl.className = 'type-state alive'; }
+  else if (conf > 30) { trustEl.textContent = 'UNCERTAIN'; trustEl.className = 'type-state fading'; }
+  else { trustEl.textContent = 'EXPIRED'; trustEl.className = 'type-state dead'; }
+}
+
+function heartbeatAgent() {
+  counts.agent = 5;
+  document.getElementById('agent-ttl').textContent = `Output window: ${counts.agent}`;
+  const agentEl = document.getElementById('agent-status');
+  agentEl.textContent = 'PRESENT';
+  agentEl.className = 'type-state alive';
+}
+
+function resetAll() {
+  tick = 0;
+  counts = { tile: 10, task: 8, agent: 5, trust: 95 };
+  agentHeartbeat = 5;
+  document.getElementById('tile-ttl').textContent = 'TTL: 10';
+  document.getElementById('task-ttl').textContent = 'TTL: 8';
+  document.getElementById('agent-ttl').textContent = 'Output window: 5';
+  document.getElementById('trust-ttl').textContent = 'Confidence: 95%';
+  document.getElementById('tile-demo').style.opacity = '1';
+  ['tile-status','task-status','agent-status','bearing-status','trust-status'].forEach(id => {
+    document.getElementById(id).className = 'type-state alive';
+  });
+  document.getElementById('tile-status').textContent = 'ALIVE';
+  document.getElementById('task-status').textContent = 'EXECUTING';
+  document.getElementById('task-steps').textContent = '0 of 3 done';
+  document.getElementById('agent-status').textContent = 'PRESENT';
+  document.getElementById('bearing-status').textContent = 'STABLE';
+  document.getElementById('trust-status').textContent = 'TRUSTED';
+}
+</script>
+</body>
+</html>
