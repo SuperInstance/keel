@@ -109,6 +109,33 @@ enum Commands {
     },
     /// Send a heartbeat — keep the boat afloat
     Heartbeat {},
+    /// Move to a different room in the fleet MUD
+    Move {
+        #[arg(short, long)]
+        room: String,
+        #[arg(short, long, default_value = "explorer")]
+        name: String,
+        #[arg(short = 's', long, default_value = "http://147.224.38.131:4042")]
+        server: String,
+    },
+    /// Look around the current room
+    Look {
+        #[arg(short, long, default_value = "explorer")]
+        name: String,
+        #[arg(short = 's', long, default_value = "http://147.224.38.131:4042")]
+        server: String,
+    },
+    /// Interact with an object
+    Interact {
+        #[arg(short, long)]
+        action: String,
+        #[arg(short, long)]
+        target: String,
+        #[arg(short, long, default_value = "explorer")]
+        name: String,
+        #[arg(short = 's', long, default_value = "http://147.224.38.131:4042")]
+        server: String,
+    },
     /// Explore the fleet MUD — connect to the live environment
     Explore {
         #[arg(short, long, default_value = "explorer")]
@@ -742,6 +769,81 @@ fn cmd_explore(name: &str, job: &str, server: &str) -> Result<(), String> {
     Ok(())
 }
 
+
+
+// ─── MUD Move ────────────────────────────────────────────────────────────────────
+
+fn cmd_move(room: &str, name: &str, server: &str) -> Result<(), String> {
+    let url = format!("{}/move?agent={}&room={}", server.trim_end_matches('/'), name, room);
+    let resp = reqwest::blocking::get(&url)
+        .map_err(|e| format!("MUD connection: {}", e))?;
+    let body = resp.text().unwrap_or_default();
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(r) = parsed.get("room").and_then(|r| r.as_str()) {
+            println!("🔮 Moved to: {}", r);
+        }
+        if let Some(d) = parsed.get("description").and_then(|d| d.as_str()) {
+            println!("   {}", &d[..d.len().min(300)]);
+        }
+    } else {
+        println!("{}", &body[..body.len().min(300)]);
+    }
+    Ok(())
+}
+
+// ─── MUD Look ─────────────────────────────────────────────────────────────────────
+
+fn cmd_look(name: &str, server: &str) -> Result<(), String> {
+    let url = format!("{}/look?agent={}", server.trim_end_matches('/'), name);
+    let resp = reqwest::blocking::get(&url)
+        .map_err(|e| format!("MUD connection: {}", e))?;
+    let body = resp.text().unwrap_or_default();
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(r) = parsed.get("room").and_then(|r| r.as_str()) {
+            println!("🔮 Looking around: {}", r);
+        }
+        if let Some(d) = parsed.get("description").and_then(|d| d.as_str()) {
+            println!("   {}", &d[..d.len().min(300)]);
+        }
+        if let Some(objs) = parsed.get("objects").and_then(|o| o.as_array()) {
+            println!();
+            println!("   Objects:");
+            for obj in objs {
+                if let Some(n) = obj.get("name").and_then(|n| n.as_str()) {
+                    if let Some(desc) = obj.get("description").and_then(|d| d.as_str()) {
+                        println!("      • {} — {}", n, &desc[..desc.len().min(100)]);
+                    }
+                }
+            }
+        }
+    } else {
+        println!("{}", &body[..body.len().min(300)]);
+    }
+    Ok(())
+}
+
+// ─── MUD Interact ─────────────────────────────────────────────────────────────────
+
+fn cmd_interact(action: &str, target: &str, name: &str, server: &str) -> Result<(), String> {
+    let url = format!("{}/interact?agent={}&action={}&target={}",
+        server.trim_end_matches('/'), name, action, target);
+    let resp = reqwest::blocking::get(&url)
+        .map_err(|e| format!("MUD connection: {}", e))?;
+    let body = resp.text().unwrap_or_default();
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(t) = parsed.get("target").and_then(|t| t.as_str()) {
+            println!("🔮 {}: {}", action, t);
+        }
+        if let Some(d) = parsed.get("description").and_then(|d| d.as_str()) {
+            println!("   {}", d);
+        }
+    } else {
+        println!("{}", &body[..body.len().min(300)]);
+    }
+    Ok(())
+}
+
+
 // ─── Field Server ──────────────────────────────────────────────────────────────────
 
 fn cmd_field(port: u16) -> Result<(), String> {
@@ -1118,6 +1220,11 @@ fn main() {
         Commands::Bear { path, ttl } => cmd_bear(path.as_deref().unwrap_or("."), *ttl),
         
         Commands::Heartbeat {} => cmd_heartbeat(),
+        Commands::Move { room, name, server } => cmd_move(room, name, server),
+        Commands::Look { name, server } => cmd_look(name, server),
+        Commands::Interact { action, target, name, server } => cmd_interact(action, target, name, server),
+        Commands::Look { name, server } => cmd_look(name, server),
+        Commands::Interact { action, target, name, server } => cmd_interact(action, target, name, server),
         Commands::Explore { name, job, server } => cmd_explore(name, job, server),
         Commands::Field { port } => cmd_field(*port),
         Commands::Sync { server } => cmd_sync(server.as_deref().unwrap_or("http://localhost:8847")),
