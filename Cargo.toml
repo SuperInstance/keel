@@ -1,5 +1,5 @@
 [package]
-name = "keel"
+name = "keel-cli"
 version = "0.1.0"
 edition = "2021"
 description = "The yard you step into. Field-effect foundation for agent fleets."
@@ -10,6 +10,9 @@ license = "MIT"
 [[bin]]
 name = "keel"
 path = "src/main.rs"
+
+# Install via: cargo install keel-cli
+# Binary is named 'keel' for ergonomics
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
