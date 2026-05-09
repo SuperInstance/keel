@@ -1,0 +1,13 @@
+[package]
+name = "keel-core"
+version = "0.1.0"
+edition = "2021"
+description = "First-person self-termination types. Every entity carries its own death from its own frame."
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde-support = ["serde"]
