@@ -1,0 +1,11 @@
+# Keel workspace
+target/
+# Build artifacts
+*.o
+*.so
+# Editor files
+.idea/
+.vscode/
+# OS files
+.DS_Store
+Thumbs.db
