@@ -324,6 +324,15 @@ The keel date doesn't change. The boat is still the same boat.
     println!("   → keel refit     (record a change)");
     println!("   → keel launch    (splash when ready)");
 
+    // Fleet status (PLATO)
+    match plato::get_status("http://localhost:8847") {
+        Ok(s) => {
+            if let Some(ref rooms) = s.rooms {
+                println!("   Fleet: {} rooms on PLATO", rooms.len());
+            }
+        }
+        Err(_) => {}
+    }
     Ok(())
 }
 
@@ -379,6 +388,15 @@ fn cmd_status() -> Result<(), String> {
         }
     }
 
+    // Fleet status (PLATO)
+    match plato::get_status("http://localhost:8847") {
+        Ok(s) => {
+            if let Some(ref rooms) = s.rooms {
+                println!("   Fleet: {} rooms on PLATO", rooms.len());
+            }
+        }
+        Err(_) => {}
+    }
     Ok(())
 }
 
@@ -426,6 +444,15 @@ fn cmd_prune(target: &str, reason: &str) -> Result<(), String> {
     println!("   Recorded in: refits/refit-{:04}.json", manifest.keel.refits);
     println!("   Total refits: {}", manifest.keel.refits);
 
+    // Fleet status (PLATO)
+    match plato::get_status("http://localhost:8847") {
+        Ok(s) => {
+            if let Some(ref rooms) = s.rooms {
+                println!("   Fleet: {} rooms on PLATO", rooms.len());
+            }
+        }
+        Err(_) => {}
+    }
     Ok(())
 }
 
@@ -458,6 +485,15 @@ fn cmd_refit(component: &str, reason: &str) -> Result<(), String> {
     println!("   Recorded in: refits/refit-{:04}.json", manifest.keel.refits);
     println!("   Total refits: {}", manifest.keel.refits);
 
+    // Fleet status (PLATO)
+    match plato::get_status("http://localhost:8847") {
+        Ok(s) => {
+            if let Some(ref rooms) = s.rooms {
+                println!("   Fleet: {} rooms on PLATO", rooms.len());
+            }
+        }
+        Err(_) => {}
+    }
     Ok(())
 }
 
@@ -504,6 +540,15 @@ fn cmd_launch(message: Option<String>) -> Result<(), String> {
     println!("   in the intelligence of those who know what it means.");
     println!("   Everything else is just steel catching up.");
 
+    // Fleet status (PLATO)
+    match plato::get_status("http://localhost:8847") {
+        Ok(s) => {
+            if let Some(ref rooms) = s.rooms {
+                println!("   Fleet: {} rooms on PLATO", rooms.len());
+            }
+        }
+        Err(_) => {}
+    }
     Ok(())
 }
 
@@ -562,6 +607,15 @@ fn cmd_sync(server: &str) -> Result<(), String> {
     println!("   Build record is now visible to the fleet.");
     println!("   Other agents can read your heading, refits, and constraints.");
 
+    // Fleet status (PLATO)
+    match plato::get_status("http://localhost:8847") {
+        Ok(s) => {
+            if let Some(ref rooms) = s.rooms {
+                println!("   Fleet: {} rooms on PLATO", rooms.len());
+            }
+        }
+        Err(_) => {}
+    }
     Ok(())
 }
 
@@ -839,6 +893,15 @@ fn cmd_probe() -> Result<(), String> {
     println!("   You cannot change the innate seaworthiness of your hardware.");
     println!("   You can only learn it and work within it.");
 
+    // Fleet status (PLATO)
+    match plato::get_status("http://localhost:8847") {
+        Ok(s) => {
+            if let Some(ref rooms) = s.rooms {
+                println!("   Fleet: {} rooms on PLATO", rooms.len());
+            }
+        }
+        Err(_) => {}
+    }
     Ok(())
 }
 
