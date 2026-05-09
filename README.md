@@ -4,6 +4,14 @@
 
 *Laid 2026-05-09*
 
+## Meta
+
+**Domain:** core-infrastructure
+**Depends on:** chrono, serde, reqwest, tiny_http, clap
+**Depended by:** SuperInstance docs
+**Implements:** first-person-ttl, bearing-rate-sensing, field-effect-coordination, plato-bridge, mud-exploration
+**Related:** fleet-coordinate, holonomy-consensus
+
 ---
 
 ```
