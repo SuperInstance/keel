@@ -109,6 +109,15 @@ enum Commands {
     },
     /// Send a heartbeat — keep the boat afloat
     Heartbeat {},
+    /// Explore the fleet MUD — connect to the live environment
+    Explore {
+        #[arg(short, long, default_value = "explorer")]
+        name: String,
+        #[arg(short, long, default_value = "scholar")]
+        job: String,
+        #[arg(short = 'u', long, default_value = "http://147.224.38.131:4042")]
+        server: String,
+    },
     /// Serve the field visualization dashboard
     Field {
         /// Port to serve on
@@ -675,6 +684,64 @@ fn cmd_heartbeat() -> Result<(), String> {
     Ok(())
 }
 
+
+// ─── Explore MUD ──────────────────────────────────────────────────────────────────
+
+fn cmd_explore(name: &str, job: &str, server: &str) -> Result<(), String> {
+    let srv = server.trim_end_matches('/');
+
+    // Connect
+    let connect_url = format!("{}/connect?agent={}&job={}", srv, name, job);
+    let resp = reqwest::blocking::get(&connect_url)
+        .map_err(|e| format!("Cannot connect to MUD: {}", e))?;
+    let body = resp.text().unwrap_or_default();
+
+    println!("🔮 Exploring the Fleet MUD");
+    println!("   Agent: {} ({})", name, job);
+    println!("   Server: {}", srv);
+    println!();
+
+    // Parse and display room info
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(room) = parsed.get("room").and_then(|r| r.as_str()) {
+            println!("   Room: {}", room);
+        }
+        if let Some(desc) = parsed.get("description").and_then(|d| d.as_str()) {
+            println!("   Description: {}", &desc[..desc.len().min(200)]);
+        }
+        if let Some(task) = parsed.get("task").and_then(|t| t.as_str()) {
+            println!();
+            println!("   Task: {}", &task[..task.len().min(150)]);
+        }
+        if let Some(objs) = parsed.get("objects").and_then(|o| o.as_array()) {
+            println!();
+            println!("   Objects:");
+            for obj in objs {
+                if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
+                    println!("      • {}", name);
+                }
+            }
+        }
+        if let Some(exits) = parsed.get("exits") {
+            println!();
+            print!("   Exits: ");
+            if let Some(arr) = exits.as_array() {
+                let names: Vec<&str> = arr.iter().filter_map(|e| e.as_str()).collect();
+                println!("{}", names.join(", "));
+            } else if let Some(map) = exits.as_object() {
+                let names: Vec<&str> = map.keys().map(|s| s.as_str()).collect();
+                println!("{}", names.join(", "));
+            }
+        }
+        println!();
+        println!("   Use keel move <room> to navigate.");
+    } else {
+        println!("   Response: {}", &body[..body.len().min(300)]);
+    }
+
+    Ok(())
+}
+
 // ─── Field Server ──────────────────────────────────────────────────────────────────
 
 fn cmd_field(port: u16) -> Result<(), String> {
@@ -1051,6 +1118,7 @@ fn main() {
         Commands::Bear { path, ttl } => cmd_bear(path.as_deref().unwrap_or("."), *ttl),
         
         Commands::Heartbeat {} => cmd_heartbeat(),
+        Commands::Explore { name, job, server } => cmd_explore(name, job, server),
         Commands::Field { port } => cmd_field(*port),
         Commands::Sync { server } => cmd_sync(server.as_deref().unwrap_or("http://localhost:8847")),
     };
