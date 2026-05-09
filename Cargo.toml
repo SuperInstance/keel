@@ -15,6 +15,7 @@ path = "src/main.rs"
 # Binary is named 'keel' for ergonomics
 
 [dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

@@ -2,6 +2,7 @@
 // Field-effect foundation for agent fleets.
 //
 // Laid 2026-05-09.
+mod plato;
 // "Constraints breed clarity."
 
 use chrono::Utc;
@@ -97,6 +98,12 @@ enum Commands {
     },
     /// Probe hardware — discover the constraints of your physical environment
     Probe {},
+    /// Sync build record to PLATO — share with the fleet
+    Sync {
+        /// Optional PLATO server URL
+        #[arg(short, long)]
+        server: Option<String>,
+    },
 }
 
 // ─── Core logic ────────────────────────────────────────────────────────────────────
@@ -500,6 +507,64 @@ fn cmd_launch(message: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+// ─── PLATO Sync ───────────────────────────────────────────────────────────────────
+
+fn cmd_sync(server: &str) -> Result<(), String> {
+    let keel_dir = find_keel_dir()
+        .ok_or_else(|| "No keel found. Are you in a keel workspace?".to_string())?;
+    let manifest = load_manifest(&keel_dir)?;
+    let project_dir = keel_dir.parent().unwrap();
+    let refits_dir = project_dir.join("refits");
+    let project_name = &manifest.keel.name;
+
+    println!("🔮 Syncing {} to PLATO at {}", project_name, server);
+    println!();
+
+    // Check PLATO is alive
+    match plato::get_status(server) {
+        Ok(status) => {
+            let room_count = status.rooms.map(|r| r.len()).unwrap_or(0);
+            println!("   PLATO: {} rooms active", room_count);
+            if let Some(ref ver) = status.version {
+                println!("   Version: {}", ver);
+            }
+        }
+        Err(e) => {
+            println!("   ⚠️  Cannot reach PLATO: {}", e);
+            println!("   Sync skipped.");
+            return Ok(());
+        }
+    }
+    println!();
+
+    // Sync build record
+    let synced = plato::sync_build_record(project_name, &refits_dir, server)
+        .unwrap_or(0);
+    println!("   Synced {} refit records", synced);
+
+    // Submit keel_date tile
+    let date_tile = plato::PlatoTile {
+        domain: "keel.meta".to_string(),
+        question: format!("{}:keel_date", project_name),
+        answer: manifest.keel.keel_date.clone(),
+        confidence: Some(1.0),
+    };
+    match plato::submit_tile(
+        &format!("keel_{}", project_name.replace('-', "_").to_lowercase()),
+        &date_tile,
+        server,
+    ) {
+        Ok(_) => println!("   Keel date synced"),
+        Err(e) => println!("   ⚠️  Could not sync keel date: {}", e),
+    }
+
+    println!();
+    println!("   Build record is now visible to the fleet.");
+    println!("   Other agents can read your heading, refits, and constraints.");
+
+    Ok(())
+}
+
 // ─── Hardware Probe ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -791,6 +856,7 @@ fn main() {
         Commands::Refit { component, reason } => cmd_refit(component, reason),
         Commands::Launch { message } => cmd_launch(message.clone()),
         Commands::Probe {} => cmd_probe(),
+        Commands::Sync { server } => cmd_sync(server.as_deref().unwrap_or("http://localhost:8847")),
     };
 
     if let Err(e) = result {
