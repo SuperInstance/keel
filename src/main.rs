@@ -8,7 +8,9 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::fs;
+
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 // ─── Data structures ───────────────────────────────────────────────────────────────
 
@@ -93,6 +95,8 @@ enum Commands {
         #[arg(short, long)]
         message: Option<String>,
     },
+    /// Probe hardware — discover the constraints of your physical environment
+    Probe {},
 }
 
 // ─── Core logic ────────────────────────────────────────────────────────────────────
@@ -496,6 +500,283 @@ fn cmd_launch(message: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Hardware Probe ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+struct HardwareProfile {
+    probe_date: String,
+    platform: String,
+    cpu: CpuInfo,
+    memory: MemInfo,
+    disk: DiskInfo,
+    gpu: Option<GpuInfo>,
+    power: Option<PowerInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CpuInfo {
+    cores: u32,
+    model: String,
+    arch: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MemInfo {
+    total_kb: u64,
+    available_kb: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DiskInfo {
+    total_gb: u64,
+    available_gb: u64,
+    usage_pct: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GpuInfo {
+    model: String,
+    memory_mb: u64,
+    driver: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PowerInfo {
+    state: String,
+    max_watts: Option<u32>,
+}
+
+fn detect_platform() -> String {
+    // Check for known embedded platforms
+    if Path::new("/etc/nv_boot_control").exists() {
+        if let Ok(content) = fs::read_to_string("/proc/device-tree/model") {
+            return format!("Jetson: {}", content.trim_end_matches('\0'));
+        }
+        return "NVIDIA Jetson".to_string();
+    }
+    if Path::new("/sys/firmware/devicetree/base/model").exists() {
+        if let Ok(mut content) = fs::read_to_string("/sys/firmware/devicetree/base/model") {
+            content.truncate(content.trim_end_matches('\0').len());
+            if content.contains("Raspberry") || content.contains("BCM") {
+                return content.trim().to_string();
+            }
+        }
+    }
+    // Generic Linux
+    if let Ok(content) = fs::read_to_string("/etc/os-release") {
+        for line in content.lines() {
+            if line.starts_with("PRETTY_NAME=") {
+                return line.trim_start_matches("PRETTY_NAME=").trim_matches('"').to_string();
+            }
+        }
+    }
+    // Check uname
+    if let Ok(output) = Command::new("uname").arg("-om").output() {
+        if let Ok(name) = String::from_utf8(output.stdout) {
+            return name.trim().to_string();
+        }
+    }
+    "Unknown".to_string()
+}
+
+fn detect_cpu() -> CpuInfo {
+    let mut cores = 0u32;
+    let mut model = String::new();
+    let mut arch = String::new();
+
+    if let Ok(content) = fs::read_to_string("/proc/cpuinfo") {
+        for line in content.lines() {
+            if line.starts_with("processor") {
+                cores += 1;
+            } else if line.starts_with("model name") && model.is_empty() {
+                model = line.split(':').nth(1).unwrap_or("").trim().to_string();
+            } else if line.starts_with("Hardware") && model.is_empty() {
+                model = line.split(':').nth(1).unwrap_or("").trim().to_string();
+            }
+        }
+    }
+
+    // For ARM / aarch64, /proc/cpuinfo might not have "processor" lines the same way
+    if cores == 0 {
+        if let Ok(content) = fs::read_to_string("/proc/cpuinfo") {
+            cores = content.lines().filter(|l| l.starts_with("processor") || l.starts_with("CPU")).count() as u32;
+        }
+    }
+    if cores == 0 {
+        cores = 1;
+    }
+
+    if let Ok(output) = Command::new("uname").arg("-m").output() {
+        arch = String::from_utf8(output.stdout).unwrap_or_default().trim().to_string();
+    }
+
+    CpuInfo { cores, model: model.trim().to_string(), arch }
+}
+
+fn detect_memory() -> MemInfo {
+    let mut total_kb = 0u64;
+    let mut available_kb = 0u64;
+    if let Ok(content) = fs::read_to_string("/proc/meminfo") {
+        for line in content.lines() {
+            if line.starts_with("MemTotal:") {
+                total_kb = line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            } else if line.starts_with("MemAvailable:") {
+                available_kb = line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            }
+        }
+    }
+    MemInfo { total_kb, available_kb }
+}
+
+fn detect_disk() -> DiskInfo {
+    if let Ok(output) = Command::new("df").arg("-B1").arg("/").output() {
+        let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+        let mut lines = stdout.lines();
+        lines.next(); // skip header
+        if let Some(line) = lines.next() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 4 {
+                let total = parts[1].parse::<f64>().unwrap_or(0.0);
+                let avail = parts[3].parse::<f64>().unwrap_or(0.0);
+                let usage = if total > 0.0 { (1.0 - avail / total) * 100.0 } else { 0.0 };
+                return DiskInfo {
+                    total_gb: (total / 1_000_000_000.0) as u64,
+                    available_gb: (avail / 1_000_000_000.0) as u64,
+                    usage_pct: usage,
+                };
+            }
+        }
+    }
+    DiskInfo { total_gb: 0, available_gb: 0, usage_pct: 0.0 }
+}
+
+fn detect_gpu() -> Option<GpuInfo> {
+    // Try nvidia-smi
+    if let Ok(output) = Command::new("nvidia-smi")
+        .args(["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"])
+        .output()
+    {
+        if let Ok(stdout) = String::from_utf8(output.stdout) {
+            let line = stdout.lines().next().unwrap_or("");
+            let parts: Vec<&str> = line.split(", ").collect();
+            if parts.len() >= 3 {
+                return Some(GpuInfo {
+                    model: parts[0].to_string(),
+                    memory_mb: parts[1].parse().unwrap_or(0),
+                    driver: parts[2].to_string(),
+                });
+            }
+        }
+    }
+    // Check for vcio / GPU on Raspberry Pi
+    if Path::new("/opt/vc/bin/vcgencmd").exists() {
+        return Some(GpuInfo {
+            model: "Broadcom VideoCore".to_string(),
+            memory_mb: 0,
+            driver: "vc4".to_string(),
+        });
+    }
+    None
+}
+
+fn detect_power() -> Option<PowerInfo> {
+    // Check for Jetson power mode
+    if let Ok(output) = Command::new("nvpmodel").arg("-q").output() {
+        if let Ok(stdout) = String::from_utf8(output.stdout) {
+            let line = stdout.lines().next().unwrap_or("");
+            let _is_quiet = line.contains("quiet") || line.contains("MAXN") || line.contains("15W") || line.contains("7W");
+            // Try to extract wattage
+            for part in line.split(|c| c == ' ' || c == ':') {
+                if let Ok(w) = part.trim().trim_end_matches('W').parse::<u32>() {
+                    if w < 100 {
+                        return Some(PowerInfo { state: line.trim().to_string(), max_watts: Some(w) });
+                    }
+                }
+            }
+            return Some(PowerInfo { state: line.trim().to_string(), max_watts: None });
+        }
+    }
+    None
+}
+
+fn cmd_probe() -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    let platform = detect_platform();
+    let cpu = detect_cpu();
+    let memory = detect_memory();
+    let disk = detect_disk();
+    let gpu = detect_gpu();
+    let power = detect_power();
+
+    let profile = HardwareProfile {
+        probe_date: now.clone(),
+        platform: platform.clone(),
+        cpu,
+        memory,
+        disk,
+        gpu,
+        power,
+    };
+
+    // Try to save to keel workspace
+    let mut saved_to = String::new();
+    if let Some(keel_dir) = find_keel_dir() {
+        let refits_dir = keel_dir.parent().unwrap().join("refits");
+        let probe_file = refits_dir.join("hardware-profile.json");
+        if let Ok(json) = serde_json::to_string_pretty(&profile) {
+            fs::write(&probe_file, &json).ok();
+            saved_to = format!("\n   Recorded in: refits/hardware-profile.json");
+        }
+    }
+
+    // Print report
+    println!("🔮 Hardware Probe");
+    println!("   Platform: {}", platform);
+    println!();
+    println!("   CPU:");
+    println!("      {} cores ({})", profile.cpu.cores, profile.cpu.arch);
+    if !profile.cpu.model.is_empty() {
+        println!("      {}", profile.cpu.model);
+    }
+    println!();
+    println!("   Memory:");
+    println!("      Total:     {} GB", profile.memory.total_kb / 1_000_000);
+    println!("      Available: {} GB", profile.memory.available_kb / 1_000_000);
+    println!();
+    println!("   Disk:");
+    println!("      Total: {} GB", profile.disk.total_gb);
+    println!("      Free:  {} GB", profile.disk.available_gb);
+    println!("      Used:  {:.0}%", profile.disk.usage_pct);
+
+    if let Some(gpu) = &profile.gpu {
+        println!();
+        println!("   GPU:");
+        println!("      {}", gpu.model);
+        if gpu.memory_mb > 0 {
+            println!("      {} MB VRAM", gpu.memory_mb);
+        }
+    }
+
+    if let Some(power) = &profile.power {
+        println!();
+        println!("   Power:");
+        println!("      Mode: {}", power.state);
+        if let Some(w) = power.max_watts {
+            println!("      Max:  {}W", w);
+        }
+    }
+
+    println!();
+    println!("   Probe date: {}", profile.probe_date);
+    println!("   {}", saved_to);
+    println!();
+    println!("   These are the constraints that breed clarity.");
+    println!("   You cannot change the innate seaworthiness of your hardware.");
+    println!("   You can only learn it and work within it.");
+
+    Ok(())
+}
+
 // ─── Entrypoint ─────────────────────────────────────────────────────────────────────
 
 fn main() {
@@ -509,6 +790,7 @@ fn main() {
         Commands::Prune { target, reason } => cmd_prune(target, reason),
         Commands::Refit { component, reason } => cmd_refit(component, reason),
         Commands::Launch { message } => cmd_launch(message.clone()),
+        Commands::Probe {} => cmd_probe(),
     };
 
     if let Err(e) = result {
