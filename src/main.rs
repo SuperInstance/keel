@@ -125,6 +125,21 @@ enum Commands {
         #[arg(short = 's', long, default_value = "http://147.224.38.131:4042")]
         server: String,
     },
+    /// Submit a tile to the fleet's PLATO — share what you learned
+    Submit {
+        #[arg(short, long)]
+        domain: String,
+        #[arg(short, long)]
+        question: String,
+        #[arg(short, long)]
+        answer: String,
+        #[arg(short, long, default_value_t = 0.8)]
+        confidence: f64,
+        #[arg(short, long, default_value = "explorer")]
+        name: String,
+        #[arg(short = 's', long, default_value = "http://147.224.38.131:4042")]
+        server: String,
+    },
     /// Interact with an object
     Interact {
         #[arg(short, long)]
@@ -771,6 +786,41 @@ fn cmd_explore(name: &str, job: &str, server: &str) -> Result<(), String> {
 
 
 
+
+// ─── Submit Tile ──────────────────────────────────────────────────────────────────
+
+fn cmd_submit(domain: &str, question: &str, answer: &str, confidence: f64, name: &str, server: &str) -> Result<(), String> {
+    let url = format!("{}/submit", server.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "agent": name,
+        "domain": domain,
+        "question": question,
+        "answer": answer,
+        "confidence": confidence,
+    });
+
+    let client = reqwest::blocking::Client::new();
+    let resp = client.post(&url).json(&body).send()
+        .map_err(|e| format!("Submit failed: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+
+    if status.is_success() {
+        println!("🔮 Tile submitted to PLATO");
+        println!("   Domain: {}", domain);
+        println!("   Question: {}", &question[..question.len().min(80)]);
+        println!("   Answer: {}", &answer[..answer.len().min(100)]);
+        println!("   Confidence: {:.0}%", confidence * 100.0);
+        println!();
+        println!("   The fleet knows something new because you visited.");
+        println!("   That knowledge persists beyond this session.");
+    } else {
+        println!("⚠️  Submission rejected: {} — {}", status, text);
+    }
+
+    Ok(())
+}
+
 // ─── MUD Move ────────────────────────────────────────────────────────────────────
 
 fn cmd_move(room: &str, name: &str, server: &str) -> Result<(), String> {
@@ -1223,8 +1273,10 @@ fn main() {
         Commands::Move { room, name, server } => cmd_move(room, name, server),
         Commands::Look { name, server } => cmd_look(name, server),
         Commands::Interact { action, target, name, server } => cmd_interact(action, target, name, server),
+        Commands::Submit { domain, question, answer, confidence, name, server } => cmd_submit(domain, question, answer, *confidence, name, server),
         Commands::Look { name, server } => cmd_look(name, server),
         Commands::Interact { action, target, name, server } => cmd_interact(action, target, name, server),
+        Commands::Submit { domain, question, answer, confidence, name, server } => cmd_submit(domain, question, answer, *confidence, name, server),
         Commands::Explore { name, job, server } => cmd_explore(name, job, server),
         Commands::Field { port } => cmd_field(*port),
         Commands::Sync { server } => cmd_sync(server.as_deref().unwrap_or("http://localhost:8847")),
