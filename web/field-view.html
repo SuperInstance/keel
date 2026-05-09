@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Keel Field View</title>
+<style>
+  body { background: #0a0e17; color: #c8d6e5; font-family: monospace; margin: 2rem; }
+  h1 { color: #48dbfb; font-size: 1.2rem; letter-spacing: 2px; }
+  h2 { color: #54a0ff; font-size: 0.9rem; margin-top: 2rem; }
+  .stats { display: flex; gap: 2rem; margin: 1rem 0; }
+  .stat { background: #1a1f2e; padding: 1rem; border-radius: 4px; min-width: 120px; }
+  .stat .val { font-size: 1.8rem; color: #48dbfb; }
+  .stat .lbl { font-size: 0.7rem; color: #8395a7; text-transform: uppercase; }
+  .room { background: #1a1f2e; padding: 0.8rem; margin: 0.3rem 0; border-radius: 4px; cursor: pointer; }
+  .room:hover { background: #222a3e; }
+  .room-name { color: #48dbfb; }
+  .room-count { color: #8395a7; float: right; }
+  .tile { padding: 0.4rem; margin: 0.2rem 0; border-left: 2px solid #54a0ff; font-size: 0.8rem; }
+  .bearing { display: inline-block; padding: 2px 6px; border-radius: 2px; font-size: 0.7rem; }
+  .stable { background: #1dd1a1; color: #0a0e17; }
+  .warning { background: #feca57; color: #0a0e17; }
+  .critical { background: #ee5a24; color: white; }
+  .footer { margin-top: 3rem; font-size: 0.7rem; color: #576574; }
+  pre { font-size: 0.75rem; color: #8395a7; overflow-x: auto; }
+  #log { height: 200px; overflow-y: auto; background: #0d1117; padding: 0.5rem; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>🔮 Keel Field View</h1>
+<div class="stats" id="stats">
+  <div class="stat"><div class="val" id="roomCount">--</div><div class="lbl">Rooms</div></div>
+  <div class="stat"><div class="val" id="tileCount">--</div><div class="lbl">Tiles</div></div>
+  <div class="stat"><div class="val" id="bearingCount">--</div><div class="lbl">Bearings</div></div>
+</div>
+
+<h2>Bearing-Rate Scan</h2>
+<div id="bearings"><pre>No bearing data yet. Start keel sync to populate.</pre></div>
+
+<h2>Fleet Rooms</h2>
+<div id="rooms"><pre>Connecting to PLATO...</pre></div>
+
+<h2>Activity Log</h2>
+<div id="log"></div>
+
+<div class="footer">
+  Keel Field View · github.com/SuperInstance/keel · "The field is the command"
+</div>
+
+<script>
+const PLATO = 'http://localhost:8847';
+const log = document.getElementById('log');
+const roomCount = document.getElementById('roomCount');
+const tileCount = document.getElementById('tileCount');
+const bearingCount = document.getElementById('bearingCount');
+
+function logMsg(msg) {
+  const t = new Date().toLocaleTimeString();
+  log.innerHTML += `<div>[${t}] ${msg}</div>`;
+  log.scrollTop = log.scrollHeight;
+}
+
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(url);
+    return await r.json();
+  } catch(e) {
+    logMsg('⚠️ ' + e.message);
+    return null;
+  }
+}
+
+async function updateStatus() {
+  const status = await fetchJSON(`${PLATO}/status`);
+  if (!status) return;
+
+  const rooms = status.rooms || {};
+  const names = Object.keys(rooms);
+  roomCount.textContent = names.length;
+  
+  let totalTiles = 0;
+  names.forEach(n => totalTiles += (rooms[n].tile_count || 0));
+  tileCount.textContent = totalTiles;
+
+  // Render rooms
+  let html = '';
+  names.sort().forEach(name => {
+    const r = rooms[name];
+    const tiles = r.tile_count || 0;
+    const icon = tiles > 10 ? '🟢' : tiles > 0 ? '🟡' : '⚪';
+    html += `<div class="room" onclick="showRoom('${name}')">
+      <span class="room-name">${icon} ${name}</span>
+      <span class="room-count">${tiles} tiles</span>
+    </div>`;
+  });
+  document.getElementById('rooms').innerHTML = html;
+}
+
+async function updateBearings() {
+  // Look for bearing tiles across all keel_* rooms
+  const status = await fetchJSON(`${PLATO}/status`);
+  if (!status) return;
+
+  const rooms = status.rooms || {};
+  const keelRooms = Object.keys(rooms).filter(n => n.startsWith('keel_'));
+  
+  let bearings = [];
+  for (const roomName of keelRooms) {
+    const room = await fetchJSON(`${PLATO}/room/${roomName}`);
+    if (!room || !room.tiles) continue;
+    room.tiles.forEach(t => {
+      if (t.domain === 'keel.refit') {
+        bearings.push({ room: roomName, q: t.question, a: t.answer.slice(0, 80) });
+      }
+    });
+  }
+  
+  bearingCount.textContent = bearings.length;
+  
+  if (bearings.length === 0) {
+    document.getElementById('bearings').innerHTML = '<pre>No refit records found. Run `keel sync` in a project.</pre>';
+    return;
+  }
+
+  let html = '';
+  bearings.forEach(b => {
+    html += `<div class="tile">📋 ${b.room}: ${b.q}<br><span style="color:#8395a7">${b.a}</span></div>`;
+  });
+  document.getElementById('bearings').innerHTML = html;
+}
+
+async function showRoom(name) {
+  const room = await fetchJSON(`${PLATO}/room/${name}`);
+  if (!room || !room.tiles) { logMsg(`Room ${name}: no data`); return; }
+  logMsg(`📖 ${name}: ${room.tiles.length} tiles`);
+  room.tiles.slice(-5).forEach(t => {
+    logMsg(`  ${t.domain}: ${t.question.slice(0, 60)}`);
+  });
+}
+
+// Initial load
+updateStatus();
+updateBearings();
+logMsg('🔮 Keel Field View connected to PLATO');
+
+// Poll every 10s
+setInterval(() => {
+  updateStatus();
+  updateBearings();
+}, 10000);
+</script>
+</body>
+</html>
