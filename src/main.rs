@@ -4,6 +4,7 @@
 // Laid 2026-05-09.
 mod plato;
 // "Constraints breed clarity."
+mod field_server;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
@@ -105,6 +106,12 @@ enum Commands {
         /// TTL in seconds before a bearing expires
         #[arg(short = 't', long, default_value_t = 60)]
         ttl: u64,
+    },
+    /// Serve the field visualization dashboard
+    Field {
+        /// Port to serve on
+        #[arg(short, long, default_value_t = 3000)]
+        port: u16,
     },
     /// Sync build record to PLATO — share with the fleet
     Sync {
@@ -640,6 +647,13 @@ fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
 }
 
 
+
+// ─── Field Server ──────────────────────────────────────────────────────────────────
+
+fn cmd_field(port: u16) -> Result<(), String> {
+    field_server::start(port)
+}
+
 // ─── PLATO Sync ───────────────────────────────────────────────────────────────────
 
 fn cmd_sync(server: &str) -> Result<(), String> {
@@ -1009,6 +1023,7 @@ fn main() {
         Commands::Probe {} => cmd_probe(),
         Commands::Bear { path, ttl } => cmd_bear(path.as_deref().unwrap_or("."), *ttl),
         
+        Commands::Field { port } => cmd_field(*port),
         Commands::Sync { server } => cmd_sync(server.as_deref().unwrap_or("http://localhost:8847")),
     };
 
