@@ -1,11 +1,20 @@
-# Keel workspace
-target/
 # Build artifacts
+target/
 *.o
 *.so
+*.a
+
 # Editor files
 .idea/
 .vscode/
+*.swp
+*.swo
+
 # OS files
 .DS_Store
 Thumbs.db
+
+# Night watch temp files
+docs/archive/
+
+# Rust
