@@ -17,4 +17,24 @@ Thumbs.db
 # Night watch temp files
 docs/archive/
 
+# Python build
+__pycache__/
+*.pyc
+*.pyo
+
+# Erlang/OTP build
+*.beam
+
+# Build artifacts
+build/
+
+# Databases
+*.db
+
+# Generated images
+*.png
+
+# Logs
+*.log
+
 # Rust
