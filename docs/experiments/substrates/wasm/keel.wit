@@ -1,0 +1,201 @@
+/// Keel TTL Engine — WASM Component Model Interface
+///
+/// The WASM Component Model IS the TTL architecture:
+/// - Each component = an agent with explicit interface (wit)
+/// - Each component has bounded resources (memory, fuel)
+/// - Each component is sandboxed by capability grants
+/// - When fuel runs out, the component halts (death is default)
+/// - Capabilities ARE trust TTL — they decay, must be renewed
+///
+/// The runtime IS the field. The component model IS the architecture.
+
+package keel:ttl;
+
+/// ─────────────────────────────────────────────
+/// WORLD: The Keel runtime world
+/// ─────────────────────────────────────────────
+/// Every Keel agent component imports this world.
+/// Capabilities are the ONLY way agents interact
+/// with the runtime — no ambient authority.
+world keel-agent {
+    // Capabilities the agent REQUIRES to function
+    import keel-ttl;
+    import fuel-budget;
+    import capability-store;
+    import plato-storage;
+
+    // The agent's exported entry point
+    export run: func() -> string;
+}
+
+/// ─────────────────────────────────────────────
+/// TTL: The five fundamental TTL patterns
+/// ─────────────────────────────────────────────
+interface keel-ttl {
+
+    /// A tile — the fundamental data structure.
+    /// Every tile carries its own death clock.
+    /// ``keel-date'' is when it was born (monotonic ms).
+    /// ``ttl-ms'' is how long it lives.
+    /// After keel-date + ttl-ms < now, the tile is dead.
+    record tile {
+        keel-date: float64,
+        ttl-ms: float64,
+        data: string,
+    }
+
+    /// Is this tile still alive?
+    /// Returns true if keel-date + ttl-ms > now(clock).
+    is-alive: func(t: tile) -> bool;
+
+    /// An agent — a WASM component with a lifespan.
+    /// ``heading'' is the agent's current directional intent.
+    /// ``last-output'' is when it last produced a result.
+    /// An agent is ``present'' if keel-date + ttl-ms > now
+    /// AND last-output is within normal cadence (> 0).
+    record agent {
+        keel-date: float64,
+        ttl-ms: float64,
+        last-output: float64,
+        heading: string,
+    }
+
+    /// Is this agent still present?
+    /// An agent can be alive (has fuel) but not present
+    /// (not producing output). Present = alive + active.
+    is-present: func(a: agent) -> bool;
+
+    /// Risk levels for collision detection.
+    /// ``stable'': all clear
+    /// ``warning'': closing at accelerating rate
+    /// ``critical'': imminent collision
+    enum risk {
+        stable,
+        warning,
+        critical,
+    }
+
+    /// A bearing — one agent's observation of another.
+    /// Each bearing has its own TTL — observations decay.
+    /// ``target'' — which agent was observed
+    /// ``angle'' — relative bearing in radians
+    /// ``rate'' — rate of angle change (rad/s)
+    /// ``observed'' — timestamp of observation
+    /// ``ttl-ms'' — how long this bearing is valid
+    record bearing {
+        target: string,
+        angle: float64,
+        rate: float64,
+        observed: float64,
+        ttl-ms: float64,
+    }
+
+    /// What's the collision risk from this bearing?
+    /// As angle closes and rate increases, risk rises.
+    collision-risk: func(b: bearing) -> risk;
+
+    /// A trust assertion — one agent's confidence
+    /// in a claim from another agent.
+    /// ``assertion'' — the claim (e.g., "heading=120")
+    /// ``confidence'' — how sure [0.0, 1.0]
+    /// ``depth'' — chain length (0 = self, 1 = direct, etc.)
+    /// ``proven'' — timestamp this was verified
+    /// ``ttl-ms'' — how long this trust is valid
+    record trust {
+        assertion: string,
+        confidence: float64,
+        depth: u8,
+        proven: float64,
+        ttl-ms: float64,
+    }
+
+    /// Effective confidence accounting for TTL decay.
+    /// Formula: confidence * (1 - decay_factor)
+    /// where decay_factor = min(1.0, elapsed / ttl-ms)
+    effective-confidence: func(t: trust) -> float64;
+}
+
+/// ─────────────────────────────────────────────
+/// FUEL: Resource budgeting (lifespan enforcement)
+/// ─────────────────────────────────────────────
+interface fuel-budget {
+    /// Fuel allocation — the agent's remaining energy.
+    /// Each invocation deducts fuel. Fuel = 0 = dead.
+    record fuel {
+        remaining: float64,
+        per-call-cost: float64,
+        calls-budget: u64,
+    }
+
+    /// Check remaining fuel. Returns 0.0 if depleted.
+    remaining: func() -> float64;
+
+    /// Consume one unit of fuel.
+    /// Returns false if fuel was already 0 (agent dead).
+    consume: func(cost: float64) -> bool;
+
+    /// Replenish fuel (capability renewal).
+    /// Only callable if caller has ``replenish'' capability.
+    replenish: func(amount: float64) -> float64;
+}
+
+/// ─────────────────────────────────────────────
+/// CAPABILITY: Capability-based security model
+/// ─────────────────────────────────────────────
+interface capability-store {
+    /// A capability — an unforgeable token granting access.
+    /// ``name'' — the capability identifier
+    /// ``granted-at'' — when it was issued
+    /// ``ttl-ms'' — how long the capability is valid
+    record capability {
+        name: string,
+        granted-at: float64,
+        ttl-ms: float64,
+    }
+
+    /// All known capability names
+    enum capability-name {
+        read-heading,    // Read bearing/heading fields
+        write-tile,      // Write tiles to PLATO storage
+        read-tile,       // Read tiles from PLATO storage
+        spawn-agent,     // Spawn new agent components
+        replenish-fuel,  // Replenish an agent's fuel
+        write-trust,     // Issue trust assertions
+        read-trust,      // Read trust assertions
+        heartbeat,       // Send/receive heartbeats
+    }
+
+    /// Check if caller has a capability (and it's not expired).
+    has: func(name: capability-name) -> bool;
+
+    /// Grant a capability to another agent.
+    /// Only callable if caller has the corresponding
+    /// ``grant-{name}'' meta-capability.
+    grant: func(target: string, name: capability-name, ttl-ms: float64);
+
+    /// Revoke a capability.
+    revoke: func(target: string, name: capability-name);
+
+    /// List capabilities held by a given agent.
+    list-for: func(agent: string) -> list<capability>;
+}
+
+/// ─────────────────────────────────────────────
+/// PLATO: Distributed storage for tiles/trust
+/// ─────────────────────────────────────────────
+interface plato-storage {
+    /// Store a tile. Requires ``write-tile'' capability.
+    store-tile: func(t: keel-ttl.tile) -> u64;
+
+    /// Read a tile by ID. Requires ``read-tile'' capability.
+    read-tile: func(id: u64) -> option<keel-ttl.tile>;
+
+    /// Store a trust assertion.
+    store-trust: func(t: keel-ttl.trust) -> u64;
+
+    /// Read a trust assertion by ID.
+    read-trust: func(id: u64) -> option<keel-ttl.trust>;
+
+    /// List all tiles for a given scope.
+    list-tiles: func(scope: string) -> list<keel-ttl.tile>;
+}

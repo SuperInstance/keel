@@ -1,0 +1,264 @@
+# Keel TTL Logisim Circuit — Digital Logic Description
+
+This is a full diagram description for a Keel TTL register cell that can be built in Logisim (or Logisim-evolution). Each "agent" in the Keel system maps to one of these cells.
+
+## System Overview
+
+```
++----------------------------------------------------------+
+|                8-AGENT KEEL SYSTEM ON A BUS               |
+|                                                          |
+|  +--------+  +--------+  +--------+     +--------+       |
+|  |Agent 0 |  |Agent 1 |  |Agent 2 | ... |Agent 7 |       |
+|  | (cell) |  | (cell) |  | (cell) |     | (cell) |       |
+|  +----+---+  +----+---+  +----+---+     +----+---+       |
+|       |           |           |              |            |
+|       +-----------+-----------+---- ... -----+            |
+|                   |                                      |
+|            +------+------+                               |
+|            |  SHARED BUS  |                               |
+|            | D[7:0] A[2:0] |                               |
+|            | R/W VALID ERR |                               |
+|            +------+------+                               |
+|                   |                                      |
+|            +------+------+                               |
+|            |  DEATH INT   |  (OR-chain of all ERRORs)    |
+|            | CONTROLLER   |                               |
+|            +-------------+                               |
++----------------------------------------------------------+
+```
+
+## Single Agent Cell Structure
+
+```
+                        (from system clock)
+                              |
+                              v
+                    +-------------------+
+                    |  TTL Counter      |
+                    |  (74LS161 × 2)    |
+                    |  Mod N down-ctr   |
+                    +---+---+---+---+---+
+                        |   |   |   |
+            +-----------+   |   |   +-----------+
+            |      +--------+   +--------+      |
+            v      v                      v      v
+    +-------------------+          +-------------------+
+    | Comparator        |          | Data Register     |
+    | 74LS85 × 2       |          | 74LS374           |
+    | Checks TTL > 0   |          | 8-bit storage     |
+    +---+---+---+------+          +---+---+---+---+---+
+        |   |   |                     |   |   |   |
+        |   |   +----------+          |   |   |   |
+        |   +-------+     |          |   |   |   |
+        v           v     v          v   v   v   v
+    +-------+    +----------------+-------+
+    | Stale |    | Tristate Buffer        |
+    | FF    |    | 74LS125 × 8            |
+    +---+---+    | Enable: TTL > 0        |
+        |        +---+---+---+---+--------+
+        |            |   |   |   |
+        |            v   v   v   v
+        |        +---+---+---+---+---+
+        +------->|  ERROR Line       |
+                 | (collects to OR)  |
+                 +---+---+---+---+---+
+```
+
+## Logisim Component Layout
+
+### Main Canvas: 8-Agent System
+
+```
+TOP-LEVEL CIRCUIT: Keel TTL System
+
+PLACE:
+  - 1x Clock (2Hz default, connect to all TTL counters)
+  - 8x Subcircuit instances: "AgentCell" (labeled Agent0 through Agent7)
+  - 1x TICK component (global timer for TTL decrements)
+  - 1x Shared bus (D[7:0] — splitter, 8 bits)
+  - 1x Address bus (A[2:0] — splitter, 3 bits for 8 agents)
+  - 1x Shared ERROR line (wire, all agent ERROR pins connected)
+  - 1x Shared VALID line (wire)
+  - 1x R/W control line
+  - 1x Hex display for shared data bus (optional, debugging)
+
+WIRING:
+  Connect all AgentCell.DATA pins → D[7:0] bus
+  Connect all AgentCell.ERROR pins → shared ERROR wire
+  Connect all AgentCell.CLK pins → Clock output
+  Connect all AgentCell.VALID pins → shared VALID wire
+  Connect R/W switch → all AgentCell.RW pins
+  Connect address selector (3-bit) → all AgentCell.ADDR pins
+```
+
+### AgentCell Subcircuit
+
+```
+SUBCIRCUIT: AgentCell
+
+INPUTS:
+  CLK        — System clock
+  R/W        — Read (1) / Write (0)
+  ADDR[2:0]  — Which register to access (3 bits → 8 registers per agent)
+  DATA[7:0]  — Shared data bus (bidirectional)
+  RESET      — System reset (load initial TTL values)
+
+OUTPUTS:
+  ERROR      — Goes HIGH when stale data is read
+  BUSY       — Indicates agent has active (non-zero) TTL
+  VALID      — Goes HIGH when agent has data available with TTL > 0
+
+INTERNAL COMPONENTS:
+
+1. TTL Counter (decrement every clock tick)
+   └─ 2x 74LS161 4-bit counters cascaded → 8-bit counter
+   └─ LOAD: load initial TTL value on RESET or WRITE
+   └─ CLK: system clock (decrements on each tick)
+   └─ ENP/ENT: tied to VCC (always active)
+   └─ RCO: ripple carry output (unused — full range down to 0)
+   └─ Output: Q[7:0] — current TTL value
+   └─ TOGGLE MODE: Count DOWN (connect U/D if using 74LS190)
+
+2. Initial TTL Load Register
+   └─ 8 DIP switches set initial TTL (configurable per agent)
+   └─ Connected to TTL counter LOAD input
+   └─ LOAD triggered on system RESET
+
+3. Data Register (holds agent's value)
+   └─ 1x 74LS374 octal D flip-flop
+   └─ Data inputs from bus (on WRITE)
+   └─ Data outputs to tristate buffers (on READ)
+   └─ Clock: WRITE strobe (R/W=0 AND address matches)
+
+4. Comparator (check if TTL > 0)
+   └─ 2x 74LS85 4-bit comparators cascaded → 8-bit
+   └─ Input A: TTL counter output Q[7:0]
+   └─ Input B: 0x00 (hardwired zero)
+   └─ Output A>B: HIGH when TTL > 0 (ALIVE)
+   └─ Output A=B: HIGH when TTL = 0 (DEAD)
+
+5. Stale Flag
+   └─ 1x D flip-flop
+   └─ D: comparator A=B output (TTL=0)
+   └─ CLK: any READ operation
+   └─ Q: Stale flag — goes HIGH when read while TTL=0
+   └─ RESET: on WRITE to this register
+
+6. Tristate Buffer Array
+   └─ 8x 74LS125 tristate buffers
+   └─ Input: data register Q[7:0]
+   └─ Enable: (TTL > 0) AND (ADDR matches) AND (R/W = 1)
+   └─ Output to bus D[7:0]
+
+7. Address Decoder
+   └─ 3-to-8 decoder (74LS138)
+   └─ Input: ADDR[2:0]
+   └─ Output: 8 select lines (one per register)
+   └─ Each select line enables: read OR write for that register
+
+8. Control Logic
+   └─ READ enable = (ADDR matches) AND (R/W = 1)
+   └─ WRITE enable = (ADDR matches) AND (R/W = 0)
+   └─ ERROR = (READ enable) AND (TTL = 0)
+   └─ VALID = (TTL > 0) — any register with remaining life
+   └─ BUSY = OR of all VALID bits
+
+9. Load Counter on Write
+   └─ On WRITE: load TTL counter with value from bus D[TTL_field]
+   └─ On WRITE: load data register with value from bus D[data_field]
+   └─ On WRITE: reset stale flag
+```
+
+## Timing Diagram
+
+```
+         ___     ___     ___     ___     ___     ___     ___
+CLK    _|   |___|   |___|   |___|   |___|   |___|   |___|   |__
+       _______________     ___________________________________
+TTL[0] ████████████████    ████████████████████████████████████
+            ↓ TTL=5           ↓ TTL=4    ...     ↓ TTL=0
+
+         _______                         ____________________
+DATA    _|A=42__|_______________________|Hi-Z_______________|___
+                                                ↑
+                                            Read while TTL=0
+                                            → DATA goes Hi-Z
+                                            → ERROR goes HIGH
+
+       ________________________________________________________
+ERROR   ___________________________________________________██__
+                                             ↑
+                                         ERROR asserted
+                                         (Death Interrupt fires)
+```
+
+## Simulation Setup
+
+### Test Case 1: Single Agent Lifecycle
+
+```
+1. RESET Agent0 with TTL=5, Data=42
+2. Clock 5 ticks
+3. After tick 5: TTL=0, Stale=1
+4. Attempt to read Agent0
+5. Expected: DATA=Hi-Z, ERROR=HIGH
+```
+
+### Test Case 2: Bus Communication
+
+```
+1. Agent0 writes Data=100, TTL=10 to shared bus
+2. Agent1 reads from bus → Data=100, TTL adjusted (min)
+3. Agent1 processes, writes new Data=200, TTL=5
+4. Agent0's TTL expires → Agent0 goes Hi-Z
+5. Agent2 can no longer read from Agent0 → ERROR
+```
+
+### Test Case 3: Death Cascade
+
+```
+1. Agent0 TTL=3, Agent1 TTL=3, Agent2 TTL=10
+2. Agent0 expires at tick 3 → goes Hi-Z
+3. Agent1 depends on Agent0 → Agent1 reads ERROR
+4. Agent1 expires at tick 3+ (interrupted, may accelerate)
+5. Agent2 survives to tick 10
+```
+
+## Logisim-Evolution Notes
+
+When implementing in Logisim-evolution:
+
+1. Use **Tunnel** components for the shared bus (avoid wire spaghetti)
+2. Use **Subcircuit** for AgentCell (reuse 8 times)
+3. Use **Counter** component for TTL (configure as 8-bit, decrement on clock)
+4. Use **Comparator** component for TTL > 0 check
+5. Use **Tristate Buffer** component from Wiring library
+6. Use **Splitter** for bus connections
+7. Use **Probe** on TTL counters for debugging
+8. Use **DIP Switch** for initial TTL configuration
+9. Save as `.circ` format for Logisim-evolution compatibility
+
+### Circuit File Structure (Logisim .circ format snippet)
+
+```
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<project source="2.7.1" version="1.0">
+  <lib name="0" desc="#Wiring"/>
+  <lib name="1" desc="#Gates"/>
+  <lib name="2" desc="#Plexers"/>
+  <lib name="3" desc="#Arithmetic"/>
+  <lib name="4" desc="#Memory"/>
+  <lib name="5" desc="#I/O"/>
+  <lib name="6" desc="#Base"/>
+  <main name="main"/>
+  
+  <!-- Subcircuit: AgentCell -->
+  ...
+  
+  <!-- Main circuit: 8-Agent Keel System -->
+  ...
+</project>
+```
+
+*(Full XML omitted for readability — recreate from component description above.)*

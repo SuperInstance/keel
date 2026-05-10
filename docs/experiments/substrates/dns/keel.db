@@ -1,0 +1,6 @@
+$ORIGIN fleet.example.
+$TTL 60
+
+; Auto-generated Keel DNS zone
+; Agent death = missing record = NXDOMAIN
+

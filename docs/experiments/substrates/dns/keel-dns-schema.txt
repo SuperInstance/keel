@@ -1,0 +1,167 @@
+================================================================================
+KEEL DNS SCHEMA — The First-Person TTL Protocol
+================================================================================
+Protocol: DNS (RFC 1035, 1987)
+Zone:     fleet.example.
+TTL:      The command. Death is default.
+
+Every DNS record carries its own death sentence in the TTL field. The resolver
+does not decide when a record dies — the record already knows.
+
+----------------------------------------------------------------------
+1. AGENT PRESENCE — A Record
+----------------------------------------------------------------------
+Format:
+  <agent-name>.fleet.example.  <TTL>  IN  A  <ip-address>
+
+TTL semantics:
+  TTL = 60 means "assume I'm dead after 60 seconds unless I update"
+  Default: 60 seconds
+
+Examples:
+  agent-01.fleet.example.  60  IN  A  10.0.0.1
+  agent-02.fleet.example.  60  IN  A  10.0.0.2
+
+Query:
+  dig agent-01.fleet.example A
+  → 10.0.0.1, TTL=60  (agent is alive)
+  → NXDOMAIN          (agent is dead — TTL expired, no update)
+
+Interpretation:
+  Existence of A record = alive
+  TTL = self-termination timer
+  NXDOMAIN = death. The resolver knows the agent is gone.
+  No re-query needed. The field knows.
+
+----------------------------------------------------------------------
+2. AGENT HEADING — TXT Record on Agent Name
+----------------------------------------------------------------------
+Format:
+  <agent-name>.fleet.example.  <TTL>  IN  TXT  "heading|<direction>|<rate>|birth=<unix-ts>"
+
+TTL semantics:
+  TTL = 15 means "my heading changes fast, don't cache stale data"
+  Default: 15 seconds
+
+Fields:
+  direction : 0.0-360.0  (degrees, compass-style)
+  rate      : 0.0-1.0    (normalized velocity)
+  birth     : <unix-ts>  (when this agent was born)
+
+Examples:
+  agent-01.fleet.example.  15  IN  TXT  "heading|315|0.7|birth=1715000000"
+  agent-02.fleet.example.  15  IN  TXT  "heading|90|0.3|birth=1715000123"
+
+Query:
+  dig agent-01.fleet.example TXT
+  → "heading|315|0.7|birth=1715000000"
+
+Interpretation:
+  Heading = agent's current trajectory through the field
+  Low TTL = rapid course correction
+  Birth timestamp = identity anchor (immutable)
+
+----------------------------------------------------------------------
+3. BEARING — TXT Record (between agents)
+----------------------------------------------------------------------
+Format:
+  bearing.<agent-a>.<agent-b>.fleet.example.  <TTL>  IN  TXT  "bearing|<angle>|<rate>|observed=<unix-ts>"
+
+TTL semantics:
+  TTL = 30 means "bearings are moderately stale"
+  Default: 30 seconds
+
+Fields:
+  angle     : 0.0-360.0  (bearing from A to B)
+  rate      : 0.0-1.0    (closing/separating rate, negative = closing)
+  observed  : <unix-ts>  (when A last sensed B)
+
+Examples:
+  bearing.agent-01.agent-02.fleet.example.  30  IN  TXT  "bearing|45|0.2|observed=1715000010"
+  bearing.agent-02.agent-01.fleet.example.  30  IN  TXT  "bearing|225|-0.2|observed=1715000012"
+
+Query:
+  dig bearing.agent-01.agent-02.fleet.example TXT
+  → "bearing|45|0.2|observed=1715000010"
+
+Interpretation:
+  Bearing = one agent's observation of another
+  Asymmetric! Bearing from A→B and B→A may differ (different observations)
+  TTL = freshness of observation
+  No update = stale = resolver drops it naturally
+
+----------------------------------------------------------------------
+4. TRUST — TXT Record
+----------------------------------------------------------------------
+Format:
+  trust.<subject>.fleet.example.  <TTL>  IN  TXT  "trust|<confidence>|<depth>|proven=<unix-ts>"
+
+TTL semantics:
+  TTL = 3600 means "trust is slow-moving, cache for an hour"
+  Default: 3600 seconds
+
+Fields:
+  confidence : 0.0-1.0  (how confident the field is in this trust assertion)
+  depth     : 0+        (transitive chain depth: 0 = direct, 1 = friend-of-friend, etc.)
+  proven    : <unix-ts> (when this trust was last verified)
+
+Examples:
+  trust.agent-01.fleet.example.  3600  IN  TXT  "trust|0.95|0|proven=1715000000"
+  trust.agent-02.fleet.example.  3600  IN  TXT  "trust|0.80|1|proven=1714999500"
+
+Query:
+  dig trust.agent-01.fleet.example TXT
+  → "trust|0.95|0|proven=1715000000"
+
+Interpretation:
+  Trust is a field property, not a subjective opinion
+  High TTL = trust changes slowly (it's earned over time)
+  Depth = the social distance of the assertion
+  Proven timestamp = when this was last validated
+
+----------------------------------------------------------------------
+5. DEATH — NXDOMAIN (Not a Record Type)
+----------------------------------------------------------------------
+NXDOMAIN is not a record — it is the absence of records. It is death.
+
+An agent that stops updating:
+  1. Misses its heartbeat → no new A record published
+  2. Old A record TTL expires → cache drops it
+  3. Next query → NXDOMAIN
+  4. Any agent that queries this agent knows: it is gone
+
+The resolver does not decide. The record decided when it was written:
+"I will exist for 60 seconds. After that, I am nothing."
+
+This is the first-person nature of death in DNS. The record says
+"I am alive until this TTL" — not "someone else checks if I'm alive."
+
+----------------------------------------------------------------------
+6. ZONE FILE COMPLETE EXAMPLE
+----------------------------------------------------------------------
+$ORIGIN fleet.example.
+$TTL 60
+
+; Agent presence (A records — TTL = heartbeat interval)
+agent-01         60  IN  A     10.0.0.1
+agent-02         60  IN  A     10.0.0.2
+
+; Agent headings (TXT records — low TTL, rapidly changing)
+agent-01         15  IN  TXT   "heading|315|0.7|birth=1715000000"
+agent-02         15  IN  TXT   "heading|90|0.3|birth=1715000123"
+
+; Bearings (TXT records — moderate TTL)
+bearing.agent-01.agent-02  30  IN  TXT  "bearing|45|0.2|observed=1715000010"
+bearing.agent-02.agent-01  30  IN  TXT  "bearing|225|-0.2|observed=1715000012"
+
+; Trust assertions (TXT records — high TTL, slow to change)
+trust.agent-01           3600  IN  TXT  "trust|0.95|0|proven=1715000000"
+trust.agent-02           3600  IN  TXT  "trust|0.80|1|proven=1714999500"
+
+; An agent that has stopped updating:
+; agent-03  60  IN  A  10.0.0.3    ← OLD record (not updated)
+; After 60s: NXDOMAIN. Agent-03 is gone.
+
+================================================================================
+END OF SCHEMA
+================================================================================
