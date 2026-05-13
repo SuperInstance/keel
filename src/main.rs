@@ -31,7 +31,7 @@ impl KeelConfig {
     }
 
     fn load() -> Result<Self, String> {
-        let contents = fs::read_to_string(&Self::path())
+        let contents = fs::read_to_string(Self::path())
             .map_err(|e| format!("No keel config found. Run 'keel init' first: {}", e))?;
         toml::from_str(&contents)
             .map_err(|e| format!("Config parse error: {}", e))
@@ -510,13 +510,14 @@ fn cmd_status_watch(server: &str, json: bool) -> Result<(), String> {
             });
             println!("{}", serde_json::to_string_pretty(&out).unwrap());
         } else {
-            println!("   {:<30} {:>8} {:>10} {}", "Room", "Tiles", "Agents", "Change");
+            println!("   {:<30} {:>8} {:>10} Change", "Room", "Tiles", "Agents");
             println!("   {:-<30} {:-<8} {:-<10} {:-<}", "", "", "", "");
 
             let mut names: Vec<_> = rooms.keys().collect();
             names.sort();
 
             let mut total_tiles = 0usize;
+            let mut new_rooms = Vec::new();
             for room_name in &names {
                 let data = rooms.get(*room_name).unwrap();
                 let tile_count = data.get("tile_count").and_then(|v| v.as_u64()).map(|n| n as usize)
@@ -524,6 +525,11 @@ fn cmd_status_watch(server: &str, json: bool) -> Result<(), String> {
                     .unwrap_or(0);
                 let agent_count = data.get("agents").and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0);
                 total_tiles += tile_count;
+
+                let is_new = !previous_rooms.contains_key(*room_name);
+                if is_new {
+                    new_rooms.push((*room_name).to_string());
+                }
 
                 let change = previous_rooms.get(*room_name).map(|(old_tiles, old_agents)| {
                     let tile_diff = tile_count as i64 - *old_tiles as i64;
@@ -534,8 +540,21 @@ fn cmd_status_watch(server: &str, json: bool) -> Result<(), String> {
                     if parts.is_empty() { "".to_string() } else { parts.join(", ") }
                 }).unwrap_or_default();
 
-                let change_marker = if change.is_empty() { "" } else { &change };
-                println!("   {:<30} {:>8} {:>10} {}", room_name, tile_count, agent_count, change_marker);
+                let change_cell = if !change.is_empty() {
+                    format!("\x1b[33m{}\x1b[0m", change)
+                } else {
+                    String::new()
+                };
+                let room_cell = if is_new {
+                    format!("\x1b[92m{}\x1b[0m", room_name)
+                } else {
+                    room_name.to_string()
+                };
+                println!("   \x1b[1m{:30} {:>8} {:>10}\x1b[0m {}", room_cell, tile_count, agent_count, change_cell);
+            }
+
+            if !new_rooms.is_empty() {
+                println!("   \x1b[92m   + {} new room(s)\x1b[0m", new_rooms.join(", "));
             }
 
             println!();
@@ -959,11 +978,10 @@ fn cmd_prune(room: &str, target: &str, timeout: Option<u64>, json: bool) -> Resu
                         }
                     }
                 }
-                if pruned == 0 {
-                    if !json {
+                if pruned == 0
+                    && !json {
                 println!("   No stale tiles found. Nothing to prune.");
             }
-                }
             }
         }
         "agents" => {
@@ -1035,7 +1053,8 @@ fn cmd_refit(room: &str, config: Option<String>, timeout: Option<u64>, json: boo
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(timeout))
             .build().map_err(|e| format!("HTTP client: {}", e))?;
-        let url = format!("{}/room/{}/submit", srv, format!("keel_{}", room.replace('-', "_").to_lowercase()));
+        let room_slug = format!("keel_{}", room.replace('-', "_").to_lowercase());
+        let url = format!("{}/room/{}/submit", srv, room_slug);
 
         match client.post(&url).json(&tile).send() {
             Ok(resp) if resp.status().is_success() => {
