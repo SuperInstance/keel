@@ -181,7 +181,7 @@ enum Commands {
         #[arg(short, long, default_value = "default")]
         name: String,
         /// PLATO server URL
-        #[arg(short = 's', long, default_value = "http://localhost:8847")]
+        #[arg(short = 's', long, default_value = "https://plato.purplepincher.org")]
         server: String,
         /// Output machine-readable JSON
         #[arg(long)]
@@ -301,7 +301,7 @@ enum Commands {
 fn plato_url() -> String {
     KeelConfig::load()
         .map(|c| c.server)
-        .unwrap_or_else(|_| "http://localhost:8847".to_string())
+        .unwrap_or_else(|_| "https://plato.purplepincher.org".to_string())
 }
 
 fn config_server(server: &str) -> String {
