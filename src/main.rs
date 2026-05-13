@@ -63,6 +63,103 @@ pub struct RoomSummary {
     pub description: Option<String>,
 }
 
+// ─── JSON Output Types ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct StatusJson {
+    pub server: String,
+    pub version: Option<String>,
+    pub rooms: Vec<RoomJson>,
+    pub total_tiles: usize,
+    pub this_member: Option<String>,
+    pub keel_date: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoomJson {
+    pub name: String,
+    pub tile_count: usize,
+    pub agent_count: usize,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FieldJson {
+    pub server: String,
+    pub rooms: Vec<RoomJson>,
+    pub edges: Vec<EdgeJson>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EdgeJson {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BearingJson {
+    pub agent_a: String,
+    pub agent_b: String,
+    pub status: String,
+    pub angle: f64,
+    pub rate: f64,
+    pub age_secs: u64,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProbeJson {
+    pub room: String,
+    pub tile_count: usize,
+    pub agent_count: usize,
+    pub domains: Vec<String>,
+    pub agents: Vec<AgentJson>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentJson {
+    pub name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PruneJson {
+    pub room: String,
+    pub target: String,
+    pub pruned_count: usize,
+    pub items: Vec<String>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefitJson {
+    pub room: String,
+    pub updated: bool,
+    pub config: Option<serde_json::Value>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LaunchJson {
+    pub agent: String,
+    pub room: String,
+    pub job: String,
+    pub success: bool,
+    pub message: Option<String>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SyncJson {
+    pub server: String,
+    pub room_count: usize,
+    pub identity_synced: bool,
+    pub tiles_synced: usize,
+    pub member: String,
+    pub timestamp: String,
+}
+
 // ─── CLI ─────────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -86,10 +183,20 @@ enum Commands {
         /// PLATO server URL
         #[arg(short = 's', long, default_value = "http://localhost:8847")]
         server: String,
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Feel the field — show fleet status from PLATO
-    Status {},
+    Status {
+        /// Refresh every 5 seconds (like top)
+        #[arg(long)]
+        watch: bool,
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Scan the field — report bearings of nearby agents
     Bear {
@@ -99,16 +206,29 @@ enum Commands {
         /// TTL in seconds before a bearing expires
         #[arg(short = 't', long, default_value_t = 60)]
         ttl: u64,
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show topology graph of rooms in the fleet
-    Field {},
+    Field {
+        /// Output Graphviz DOT format for visualization
+        #[arg(long)]
+        graph: bool,
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Probe a room for its capabilities
     Probe {
         /// Room name to probe (default: this member's room)
         #[arg(short, long)]
         room: Option<String>,
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Remove stale tiles/agents from a room
@@ -119,6 +239,12 @@ enum Commands {
         /// What to prune: tiles, agents, or all
         #[arg(short, long, default_value = "tiles")]
         target: String,
+        /// Timeout in seconds for PLATO connection
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Update a room's configuration
@@ -129,6 +255,12 @@ enum Commands {
         /// New config as key=value pairs (comma-separated)
         #[arg(short, long)]
         config: Option<String>,
+        /// Timeout in seconds for PLATO connection
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Deploy a new agent to a room
@@ -142,6 +274,12 @@ enum Commands {
         /// Agent role/job
         #[arg(short, long, default_value = "worker")]
         job: String,
+        /// Timeout in seconds for PLATO connection
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Sync tiles with PLATO server
@@ -149,6 +287,12 @@ enum Commands {
         /// Optional PLATO server URL
         #[arg(short, long)]
         server: Option<String>,
+        /// Timeout in seconds for PLATO connection
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -166,7 +310,7 @@ fn config_server(server: &str) -> String {
 
 // ─── Commands ────────────────────────────────────────────────────────────────────
 
-fn cmd_init(name: &str, server: &str) -> Result<(), String> {
+fn cmd_init(name: &str, server: &str, json: bool) -> Result<(), String> {
     let now = Utc::now().to_rfc3339();
     let cfg = KeelConfig {
         name: name.to_string(),
@@ -179,6 +323,19 @@ fn cmd_init(name: &str, server: &str) -> Result<(), String> {
     let rooms_dir = KeelConfig::path().parent().unwrap().join("rooms");
     fs::create_dir_all(&rooms_dir)
         .map_err(|e| format!("Cannot create rooms dir: {}", e))?;
+
+    if json {
+        let out = serde_json::json!({
+            "ok": true,
+            "name": name,
+            "server": cfg.server,
+            "keel_date": now,
+            "config_path": KeelConfig::path().to_string_lossy(),
+            "rooms_dir": rooms_dir.to_string_lossy(),
+        });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return Ok(());
+    }
 
     println!("🔮 Keel initialized");
     println!("   Name:    {}", name);
@@ -193,13 +350,56 @@ fn cmd_init(name: &str, server: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_status() -> Result<(), String> {
+fn cmd_status(watch: bool, json: bool) -> Result<(), String> {
     let server = plato_url();
+
+    if watch {
+        cmd_status_watch(&server, json)
+    } else {
+        cmd_status_once(&server, json)
+    }
+}
+
+fn cmd_status_once(server: &str, json: bool) -> Result<(), String> {
+    let status = plato::get_status(server)?;
+    let room_count = status.rooms.as_ref().map(|r| r.len()).unwrap_or(0);
+
+    if json {
+        let rooms: Vec<RoomJson> = status.rooms.as_ref().map(|rooms| {
+            let mut names: Vec<_> = rooms.keys().collect();
+            names.sort();
+            names.iter().map(|name| {
+                let data = rooms.get(*name).unwrap();
+                let tile_count = data.get("tile_count").and_then(|v| v.as_u64()).map(|n| n as usize)
+                    .or_else(|| data.get("tiles").and_then(|v| v.as_array()).map(|arr| arr.len()))
+                    .unwrap_or(0);
+                let agent_count = data.get("agents").and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0);
+                RoomJson {
+                    name: name.to_string(),
+                    tile_count,
+                    agent_count,
+                    description: data.get("description").and_then(|d| d.as_str()).map(String::from),
+                }
+            }).collect()
+        }).unwrap_or_default();
+
+        let total_tiles: usize = rooms.iter().map(|r| r.tile_count).sum();
+        let cfg = KeelConfig::load().ok();
+
+        let out = StatusJson {
+            server: server.to_string(),
+            version: status.version,
+            rooms,
+            total_tiles,
+            this_member: cfg.as_ref().map(|c| c.name.clone()),
+            keel_date: cfg.as_ref().map(|c| c.keel_date.clone()),
+        };
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return Ok(());
+    }
+
     println!("🔮 Fleet Status — {}", server);
     println!();
-
-    let status = plato::get_status(&server)?;
-    let room_count = status.rooms.as_ref().map(|r| r.len()).unwrap_or(0);
 
     if let Some(ref ver) = status.version {
         println!("   PLATO version: {}", ver);
@@ -216,8 +416,8 @@ fn cmd_status() -> Result<(), String> {
         names.sort();
 
         let mut total_tiles = 0usize;
-        for room_name in names {
-            let data = &rooms[room_name];
+        for room_name in &names {
+            let data = rooms.get(*room_name).unwrap();
             let tile_count = data
                 .get("tile_count")
                 .and_then(|v| v.as_u64())
@@ -252,7 +452,114 @@ fn cmd_status() -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
+fn cmd_status_watch(server: &str, json: bool) -> Result<(), String> {
+    use std::io::{self, Write};
+    use std::time::Duration;
+
+    let mut previous_rooms: HashMap<String, (usize, usize)> = HashMap::new();
+
+    loop {
+        // Clear screen
+        print!("\x1b[2J\x1b[H");
+        let _ = io::stdout().flush();
+
+        println!("🔮 Fleet Status — {} (refreshing every 5s, Ctrl+C to stop)", server);
+        println!();
+
+        let status = match plato::get_status(server) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("   ⚠️  Cannot reach PLATO: {}", e);
+                println!("   Retrying in 5s...");
+                std::thread::sleep(Duration::from_secs(5));
+                continue;
+            }
+        };
+
+        let rooms = match &status.rooms {
+            Some(r) => r,
+            None => {
+                println!("   No rooms found on PLATO.");
+                std::thread::sleep(Duration::from_secs(5));
+                continue;
+            }
+        };
+
+        if json {
+            let rooms_json: Vec<RoomJson> = {
+                let mut names: Vec<_> = rooms.keys().collect();
+                names.sort();
+                names.iter().map(|name| {
+                    let data = rooms.get(*name).unwrap();
+                    let tile_count = data.get("tile_count").and_then(|v| v.as_u64()).map(|n| n as usize)
+                        .or_else(|| data.get("tiles").and_then(|v| v.as_array()).map(|arr| arr.len()))
+                        .unwrap_or(0);
+                    let agent_count = data.get("agents").and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0);
+                    RoomJson {
+                        name: name.to_string(),
+                        tile_count,
+                        agent_count,
+                        description: data.get("description").and_then(|d| d.as_str()).map(String::from),
+                    }
+                }).collect()
+            };
+            let out = serde_json::json!({
+                "server": server,
+                "version": status.version,
+                "rooms": rooms_json,
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        } else {
+            println!("   {:<30} {:>8} {:>10} {}", "Room", "Tiles", "Agents", "Change");
+            println!("   {:-<30} {:-<8} {:-<10} {:-<}", "", "", "", "");
+
+            let mut names: Vec<_> = rooms.keys().collect();
+            names.sort();
+
+            let mut total_tiles = 0usize;
+            for room_name in &names {
+                let data = rooms.get(*room_name).unwrap();
+                let tile_count = data.get("tile_count").and_then(|v| v.as_u64()).map(|n| n as usize)
+                    .or_else(|| data.get("tiles").and_then(|v| v.as_array()).map(|arr| arr.len()))
+                    .unwrap_or(0);
+                let agent_count = data.get("agents").and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0);
+                total_tiles += tile_count;
+
+                let change = previous_rooms.get(*room_name).map(|(old_tiles, old_agents)| {
+                    let tile_diff = tile_count as i64 - *old_tiles as i64;
+                    let agent_diff = agent_count as i64 - *old_agents as i64;
+                    let mut parts = vec![];
+                    if tile_diff != 0 { parts.push(format!("tiles{:+}", tile_diff)); }
+                    if agent_diff != 0 { parts.push(format!("agents{:+}", agent_diff)); }
+                    if parts.is_empty() { "".to_string() } else { parts.join(", ") }
+                }).unwrap_or_default();
+
+                let change_marker = if change.is_empty() { "" } else { &change };
+                println!("   {:<30} {:>8} {:>10} {}", room_name, tile_count, agent_count, change_marker);
+            }
+
+            println!();
+            println!("   {:<30} {:>8}", "TOTAL", total_tiles);
+
+            // Update previous rooms
+            previous_rooms.clear();
+            for room_name in &names {
+                let data = rooms.get(*room_name).unwrap();
+                let tile_count = data.get("tile_count").and_then(|v| v.as_u64()).map(|n| n as usize)
+                    .or_else(|| data.get("tiles").and_then(|v| v.as_array()).map(|arr| arr.len()))
+                    .unwrap_or(0);
+                let agent_count = data.get("agents").and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0);
+                previous_rooms.insert((*room_name).to_string(), (tile_count, agent_count));
+            }
+        }
+
+        println!();
+        println!("   Press Ctrl+C to stop.");
+        std::thread::sleep(Duration::from_secs(5));
+    }
+}
+
+fn cmd_bear(path: &str, ttl_secs: u64, json: bool) -> Result<(), String> {
     use std::collections::HashMap;
     use std::time::SystemTime;
 
@@ -280,25 +587,19 @@ fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
     }
 
     if agents.is_empty() {
-        println!("🔮 No .heading files found in '{}'", path);
-        println!("   Create: echo 'agent-name|angle|rate' > some-agent.heading");
+        if json {
+            println!("[]");
+        } else {
+            println!("🔮 No .heading files found in '{}'", path);
+            println!("   Create: echo 'agent-name|angle|rate' > some-agent.heading");
+        }
         return Ok(());
     }
 
     let now = SystemTime::now();
     let names: Vec<String> = agents.keys().cloned().collect();
     let mut warnings = 0usize;
-
-    println!("🔮 Bearing-Rate Scan");
-    println!("   Path: {}", path);
-    println!("   Agents found: {}", names.len());
-    println!("   TTL: {}s", ttl_secs);
-    println!();
-    println!(
-        "   {:<20} {:<20} {:<10} {:<10} {}",
-        "Agent A", "Agent B", "Status", "Angle", "Age"
-    );
-    println!("   {:-<20} {:-<20} {:-<10} {:-<10} {:-<}", "", "", "", "", "");
+    let mut bearings_out: Vec<BearingJson> = Vec::new();
 
     for i in 0..names.len() {
         for j in (i + 1)..names.len() {
@@ -317,22 +618,39 @@ fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
                     0.0
                 };
 
-                let (icon, status) = if max_age > ttl_secs {
+                let (icon, status_str, warning_msg) = if max_age > ttl_secs {
                     warnings += 1;
-                    ("🔴", "CRITICAL")
+                    ("🔴", "CRITICAL", Some(format!("bearing expired ({}s > {}s TTL)", max_age, ttl_secs)))
                 } else if rate < 0.001 && angle_diff < 0.5 {
                     warnings += 1;
-                    ("🟡", "WARNING")
+                    ("🟡", "WARNING", Some("collision course — bearing not changing".to_string()))
                 } else {
-                    ("🟢", "STABLE")
+                    ("🟢", "STABLE", None)
                 };
 
-                println!(
-                    "   {:<20} {:<20} {} {:<10.4}  {}s",
-                    a, b, icon, angle_diff, max_age
-                );
+                if json {
+                    bearings_out.push(BearingJson {
+                        agent_a: a.clone(),
+                        agent_b: b.clone(),
+                        status: status_str.to_string(),
+                        angle: angle_diff,
+                        rate,
+                        age_secs: max_age,
+                        warning: warning_msg,
+                    });
+                } else {
+                    println!(
+                        "   {:<20} {:<20} {} {:<10.4}  {}s",
+                        a, b, icon, angle_diff, max_age
+                    );
+                }
             }
         }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&bearings_out).unwrap());
+        return Ok(());
     }
 
     println!();
@@ -351,7 +669,7 @@ fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_field() -> Result<(), String> {
+fn cmd_field(graph: bool, json: bool) -> Result<(), String> {
     let server = plato_url();
     let status = plato::get_status(&server)?;
 
@@ -363,36 +681,83 @@ fn cmd_field() -> Result<(), String> {
         }
     };
 
-    println!("🔮 Fleet Field Topology — {}", server);
-    println!();
-
     let mut names: Vec<_> = rooms.keys().collect();
     names.sort();
 
-    // Build adjacency from room names (heuristic: rooms with similar prefixes are connected)
-    let mut room_info: Vec<(&String, &serde_json::Value)> =
+    let room_info: Vec<(&String, &serde_json::Value)> =
         names.iter().map(|n| (*n, rooms.get(*n).unwrap())).collect();
 
-    // ASCII topology: connected rooms share edges
-    // We'll render rooms as nodes, and draw edges between rooms with shared prefixes
+    if graph {
+        // Output Graphviz DOT format
+        println!("digraph fleet {{");
+        println!("    graph [label=\"Fleet Field Topology — {}\" fontname=\"monospace\"];", server);
+        println!("    node [shape=box style=filled fillcolor=lightblue];");
+        for (name, data) in &room_info {
+            let tile_count = data.get("tile_count").and_then(|v| v.as_u64()).map(|n| n as usize)
+                .or_else(|| data.get("tiles").and_then(|v| v.as_array()).map(|arr| arr.len()))
+                .unwrap_or(0);
+            let agent_count = data.get("agents").and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0);
+            println!("    \"{}\" [label=\"{} (tiles={}, agents={})\"];", name, name, tile_count, agent_count);
+        }
+        // Draw edges between rooms with shared prefix
+        for i in 0..names.len() {
+            for j in (i + 1)..names.len() {
+                let a = names[i];
+                let b = names[j];
+                if a.starts_with(&b[..b.len().min(4)]) || b.starts_with(&a[..a.len().min(4)]) {
+                    println!("    \"{}\" -> \"{}\";", a, b);
+                }
+            }
+        }
+        println!("}}");
+        return Ok(());
+    }
+
+    if json {
+        let rooms_json: Vec<RoomJson> = room_info.iter().map(|(name, data)| {
+            let tile_count = data.get("tile_count").and_then(|v| v.as_u64()).map(|n| n as usize)
+                .or_else(|| data.get("tiles").and_then(|v| v.as_array()).map(|arr| arr.len()))
+                .unwrap_or(0);
+            let agent_count = data.get("agents").and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0);
+            RoomJson {
+                name: (*name).clone(),
+                tile_count,
+                agent_count,
+                description: data.get("description").and_then(|d| d.as_str()).map(String::from),
+            }
+        }).collect();
+
+        let mut edges: Vec<EdgeJson> = Vec::new();
+        for i in 0..names.len() {
+            for j in (i + 1)..names.len() {
+                let a = names[i];
+                let b = names[j];
+                if a.starts_with(&b[..b.len().min(4)]) || b.starts_with(&a[..a.len().min(4)]) {
+                    edges.push(EdgeJson { from: a.clone(), to: b.clone() });
+                }
+            }
+        }
+
+        let out = FieldJson {
+            server: server.to_string(),
+            rooms: rooms_json,
+            edges,
+        };
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return Ok(());
+    }
+
+    println!("🔮 Fleet Field Topology — {}", server);
+    println!();
+
     println!("   Legend: [room name] tiles=N agents=N");
     println!();
 
     for (name, data) in &room_info {
-        let tile_count = data
-            .get("tile_count")
-            .and_then(|v| v.as_u64()).map(|n| n as usize)
-            .or_else(|| {
-                data.get("tiles")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.len())
-            })
+        let tile_count = data.get("tile_count").and_then(|v| v.as_u64()).map(|n| n as usize)
+            .or_else(|| data.get("tiles").and_then(|v| v.as_array()).map(|arr| arr.len()))
             .unwrap_or(0);
-        let agent_count = data
-            .get("agents")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.len())
-            .unwrap_or(0);
+        let agent_count = data.get("agents").and_then(|v| v.as_array()).map(|arr| arr.len()).unwrap_or(0);
 
         println!("   ┌──[ {} ]", name);
         println!("   │    tiles: {}", tile_count);
@@ -408,14 +773,13 @@ fn cmd_field() -> Result<(), String> {
         println!();
     }
 
-    // Draw connections between rooms with shared prefix (e.g., "oracle1" -> "oracle1_history")
+    // Draw connections
     println!("   Topology edges (shared prefix):");
     let mut edges: Vec<(String, String)> = Vec::new();
     for i in 0..names.len() {
         for j in (i + 1)..names.len() {
             let a = names[i];
             let b = names[j];
-            // If one name is a prefix of the other, draw an edge
             if a.starts_with(&b[..b.len().min(4)]) || b.starts_with(&a[..a.len().min(4)]) {
                 edges.push((a.clone(), b.clone()));
             }
@@ -435,16 +799,13 @@ fn cmd_field() -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_probe(room: Option<String>, server: &str) -> Result<(), String> {
+fn cmd_probe(room: Option<String>, server: &str, json: bool) -> Result<(), String> {
     let srv = config_server(server);
     let room_name = room.unwrap_or_else(|| {
         KeelConfig::load()
             .map(|c| c.name)
             .unwrap_or_else(|_| "unknown".to_string())
     });
-
-    println!("🔮 Probing room: {}", room_name);
-    println!();
 
     let url = format!("{}/room/{}", srv, room_name);
     let resp = reqwest::blocking::get(&url)
@@ -454,7 +815,17 @@ fn cmd_probe(room: Option<String>, server: &str) -> Result<(), String> {
     let body = resp.text().unwrap_or_default();
 
     if !status.is_success() {
-        println!("   ⚠️  PLATO {}: {}", status, body);
+        if json {
+            let out = serde_json::json!({
+                "error": format!("PLATO {}: {}", status, body),
+                "room": room_name,
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        } else {
+            println!("🔮 Probing room: {}", room_name);
+            println!();
+            println!("   ⚠️  PLATO {}: {}", status, body);
+        }
         return Ok(());
     }
 
@@ -464,46 +835,64 @@ fn cmd_probe(room: Option<String>, server: &str) -> Result<(), String> {
     // Extract tiles
     let tiles = parsed.get("tiles").and_then(|v| v.as_array());
     let tile_count = tiles.as_ref().map(|t| t.len()).unwrap_or(0);
-    println!("   Tiles: {}", tile_count);
 
     // Extract domains (unique)
-    if let Some(arr) = tiles {
-        let mut domains: Vec<_> = arr
+    let domains: Vec<String> = tiles.as_ref().map(|arr| {
+        let mut doms: Vec<_> = arr
             .iter()
             .filter_map(|t| t.get("domain").and_then(|d| d.as_str()))
             .collect();
-        domains.sort();
-        domains.dedup();
-        println!("   Domains: {}", domains.len());
-        if !domains.is_empty() {
-            println!("   {:<15}", "Domain list:");
-            for domain in domains.iter().take(20) {
-                println!("      • {}", domain);
-            }
-            if domains.len() > 20 {
-                println!("      ... and {} more", domains.len() - 20);
-            }
-        }
-    }
+        doms.sort();
+        doms.dedup();
+        doms.into_iter().map(String::from).collect()
+    }).unwrap_or_default();
 
     // Extract agents
-    let agents = parsed.get("agents").and_then(|v| v.as_array());
-    let agent_count = agents.as_ref().map(|a| a.len()).unwrap_or(0);
-    println!();
-    println!("   Agents: {}", agent_count);
-    if let Some(arr) = agents {
-        for agent in arr.iter().take(10) {
-            let name = agent.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-            let role = agent.get("role").and_then(|r| r.as_str()).unwrap_or("worker");
-            println!("      • {} ({})", name, role);
-        }
-        if agent_count > 10 {
-            println!("      ... and {} more", agent_count - 10);
-        }
+    let agents_arr = parsed.get("agents").and_then(|v| v.as_array());
+    let agent_count = agents_arr.as_ref().map(|a| a.len()).unwrap_or(0);
+    let agents_json: Vec<AgentJson> = agents_arr.map(|arr| {
+        arr.iter().map(|agent| AgentJson {
+            name: agent.get("name").and_then(|n| n.as_str()).unwrap_or("?").to_string(),
+            role: agent.get("role").and_then(|r| r.as_str()).unwrap_or("worker").to_string(),
+        }).collect()
+    }).unwrap_or_default();
+
+    let description = parsed.get("description").and_then(|d| d.as_str()).map(String::from);
+
+    if json {
+        let out = ProbeJson {
+            room: room_name,
+            tile_count,
+            agent_count,
+            domains: domains.clone(),
+            agents: agents_json,
+            description: description.clone(),
+        };
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return Ok(());
     }
 
-    // Room metadata
-    if let Some(desc) = parsed.get("description").and_then(|d| d.as_str()) {
+    println!("🔮 Probing room: {}", room_name);
+    println!();
+    println!("   Tiles: {}", tile_count);
+    println!("   Domains: {}", domains.len());
+    for domain in domains.iter().take(20) {
+        println!("      • {}", domain);
+    }
+    if domains.len() > 20 {
+        println!("      ... and {} more", domains.len() - 20);
+    }
+
+    println!();
+    println!("   Agents: {}", agent_count);
+    for agent in agents_json.iter().take(10) {
+        println!("      • {} ({})", agent.name, agent.role);
+    }
+    if agent_count > 10 {
+        println!("      ... and {} more", agent_count - 10);
+    }
+
+    if let Some(desc) = description {
         println!();
         println!("   Description: {}", desc);
     }
@@ -517,22 +906,35 @@ fn cmd_probe(room: Option<String>, server: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_prune(room: &str, target: &str, server: &str) -> Result<(), String> {
-    let srv = config_server(server);
+fn cmd_prune(room: &str, target: &str, timeout: Option<u64>, json: bool) -> Result<(), String> {
+    let srv = plato_url();
     let now = Utc::now().to_rfc3339();
+    let timeout = timeout.unwrap_or(5);
 
-    println!("🔮 Pruning {} from room '{}'", target, room);
-    println!();
+    if !json {
+        println!("🔮 Pruning {} from room '{}'", target, room);
+        println!();
+    }
 
     // Fetch current room state
     let url = format!("{}/room/{}", srv, room);
-    let resp = reqwest::blocking::get(&url)
-        .map_err(|e| format!("Cannot reach PLATO: {}", e))?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout))
+        .build().map_err(|e| format!("HTTP client: {}", e))?;
+    let resp = client.get(&url).send().map_err(|e| format!("Cannot reach PLATO: {}", e))?;
     let status_code = resp.status();
     let body = resp.text().unwrap_or_default();
 
     if !status_code.is_success() {
-        println!("   ⚠️  Room '{}' not found: {}", room, body);
+        if json {
+            let out = serde_json::json!({
+                "error": format!("Room '{}' not found: {}", room, body),
+                "room": room,
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        } else {
+            println!("   ⚠️  Room '{}' not found: {}", room, body);
+        }
         return Ok(());
     }
 
@@ -541,21 +943,26 @@ fn cmd_prune(room: &str, target: &str, server: &str) -> Result<(), String> {
 
     let tiles = parsed.get("tiles").and_then(|v| v.as_array());
     let mut pruned = 0usize;
+    let mut items: Vec<String> = Vec::new();
 
     match target {
         "tiles" => {
             if let Some(arr) = tiles {
-                let mut pruned = 0usize;
                 for tile in arr {
                     if tile.get("stale").and_then(|s| s.as_bool()).unwrap_or(false) {
                         pruned += 1;
                         if let Some(q) = tile.get("question").and_then(|q| q.as_str()) {
-                            println!("   ✂️  Pruned stale tile: {}", q);
+                            items.push(q.to_string());
+                            if !json {
+                                println!("   ✂️  Pruned stale tile: {}", q);
+                            }
                         }
                     }
                 }
                 if pruned == 0 {
-                    println!("   No stale tiles found. Nothing to prune.");
+                    if !json {
+                println!("   No stale tiles found. Nothing to prune.");
+            }
                 }
             }
         }
@@ -564,6 +971,7 @@ fn cmd_prune(room: &str, target: &str, server: &str) -> Result<(), String> {
             if let Some(arr) = agents {
                 for agent in arr {
                     if let Some(name) = agent.get("name").and_then(|n| n.as_str()) {
+                        items.push(name.to_string());
                         println!("   ✂️  Agent '{}' marked absent.", name);
                     }
                 }
@@ -574,17 +982,32 @@ fn cmd_prune(room: &str, target: &str, server: &str) -> Result<(), String> {
         }
     }
 
+    if json {
+        let out = PruneJson {
+            room: room.to_string(),
+            target: target.to_string(),
+            pruned_count: pruned,
+            items,
+            timestamp: now,
+        };
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return Ok(());
+    }
+
     println!();
-    println!("   Pruned {} item(s) from room '{}'.", pruned, room);
+    if !json {
+        println!("   Pruned {} item(s) from room '{}'.", pruned, room);
+    }
     println!("   Date: {}", now);
     Ok(())
 }
 
-fn cmd_refit(room: &str, config: Option<String>, server: &str) -> Result<(), String> {
-    let srv = config_server(server);
+fn cmd_refit(room: &str, config: Option<String>, timeout: Option<u64>, json: bool) -> Result<(), String> {
+    let srv = plato_url();
     let now = Utc::now().to_rfc3339();
+    let timeout = timeout.unwrap_or(5);
 
-    println!("🔮 Refitting room '{}'", room);
+    if !json { println!("🔮 Refitting room '{}'", room); }
     println!();
 
     if let Some(cfg) = config {
@@ -599,6 +1022,8 @@ fn cmd_refit(room: &str, config: Option<String>, server: &str) -> Result<(), Str
             })
             .collect();
 
+        let config_json: serde_json::Value = serde_json::to_value(&updates).unwrap_or(serde_json::Value::Null);
+
         // Submit a refit tile to the room
         let tile = plato::PlatoTile {
             domain: "keel.room_config".to_string(),
@@ -607,107 +1032,213 @@ fn cmd_refit(room: &str, config: Option<String>, server: &str) -> Result<(), Str
             confidence: Some(0.95),
         };
 
-        match plato::submit_tile(
-            &format!("keel_{}", room.replace('-', "_").to_lowercase()),
-            &tile,
-            &srv,
-        ) {
-            Ok(_) => {
-                println!("   ✅ Config updated:");
-                for (k, v) in &updates {
-                    println!("      {} = {}", k, v);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(timeout))
+            .build().map_err(|e| format!("HTTP client: {}", e))?;
+        let url = format!("{}/room/{}/submit", srv, format!("keel_{}", room.replace('-', "_").to_lowercase()));
+
+        match client.post(&url).json(&tile).send() {
+            Ok(resp) if resp.status().is_success() => {
+                if json {
+                    let out = RefitJson {
+                        room: room.to_string(),
+                        updated: true,
+                        config: Some(config_json),
+                        timestamp: now,
+                    };
+                    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+                } else {
+                    println!("   ✅ Config updated:");
+                    for (k, v) in &updates {
+                        println!("      {} = {}", k, v);
+                    }
                 }
             }
-            Err(e) => println!("   ⚠️  Could not submit refit: {}", e),
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().unwrap_or_default();
+                if json {
+                    let out = serde_json::json!({
+                        "error": format!("Submit failed: {} — {}", status, body),
+                        "room": room,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+                } else {
+                    println!("   ⚠️  Could not submit refit: {} — {}", status, body);
+                }
+            }
+            Err(e) => {
+                if json {
+                    let out = serde_json::json!({
+                        "error": format!("Could not submit refit: {}", e),
+                        "room": room,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+                } else {
+                    println!("   ⚠️  Could not submit refit: {}", e);
+                }
+            }
         }
     } else {
         // Show current room config
         let url = format!("{}/room/{}", srv, room);
-        let resp = reqwest::blocking::get(&url)
-            .map_err(|e| format!("Cannot reach PLATO: {}", e))?;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(timeout))
+            .build().map_err(|e| format!("HTTP client: {}", e))?;
+        let resp = client.get(&url).send().map_err(|e| format!("Cannot reach PLATO: {}", e))?;
         let status_code = resp.status();
         let body = resp.text().unwrap_or_default();
 
         if status_code.is_success() {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
-                println!("   Current config for '{}':", room);
-                if let Some(obj) = parsed.as_object() {
-                    for (k, v) in obj.iter().take(10) {
-                        if k != "tiles" && k != "agents" {
-                            println!("      {} = {}", k, v);
+                if json {
+                    let out = RefitJson {
+                        room: room.to_string(),
+                        updated: false,
+                        config: Some(parsed),
+                        timestamp: now,
+                    };
+                    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+                } else {
+                    println!("   Current config for '{}':", room);
+                    if let Some(obj) = parsed.as_object() {
+                        for (k, v) in obj.iter().take(10) {
+                            if k != "tiles" && k != "agents" {
+                                println!("      {} = {}", k, v);
+                            }
                         }
                     }
                 }
             }
         } else {
-            println!("   ⚠️  Room '{}' not found.", room);
+            if json {
+                let out = serde_json::json!({
+                    "error": format!("Room '{}' not found.", room),
+                    "room": room,
+                });
+                println!("{}", serde_json::to_string_pretty(&out).unwrap());
+            } else {
+                println!("   ⚠️  Room '{}' not found.", room);
+            }
         }
     }
 
-    println!();
-    println!("   Refit date: {}", now);
     Ok(())
 }
 
-fn cmd_launch(room: &str, name: &str, job: &str, server: &str) -> Result<(), String> {
-    let srv = config_server(server);
+fn cmd_launch(room: &str, name: &str, job: &str, timeout: Option<u64>, json: bool) -> Result<(), String> {
+    let srv = plato_url();
     let now = Utc::now().to_rfc3339();
+    let timeout = timeout.unwrap_or(5);
 
-    println!("🔮 Launching agent '{}' to room '{}'", name, room);
+    if !json { println!("🔮 Launching agent '{}' to room '{}'", name, room); }
     println!();
 
-    // Register agent with the room via the room's connect or agent endpoint
-    let connect_url = format!("{}/room/{}/connect?agent={}&job={}", srv, room, name, job);
-    let resp = reqwest::blocking::Client::new()
-        .post(&connect_url)
-        .send()
-        .map_err(|e| format!("Cannot reach PLATO: {}", e))?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout))
+        .build().map_err(|e| format!("HTTP client: {}", e))?;
 
+    // Try primary endpoint
+    let connect_url = format!("{}/room/{}/connect?agent={}&job={}", srv, room, name, job);
+    let resp = client.post(&connect_url).send().map_err(|e| format!("Cannot reach PLATO: {}", e))?;
     let status = resp.status();
     let body = resp.text().unwrap_or_default();
 
     if status.is_success() {
-        println!("   ✅ Agent '{}' ({}) deployed to '{}'", name, job, room);
-        println!();
-        println!("   Run 'keel probe --room {}' to verify presence.", room);
-    } else {
-        // Try alternate endpoint
-        let alt_url = format!("{}/connect?agent={}&room={}&job={}", srv, name, room, job);
-        if let Ok(resp2) = reqwest::blocking::Client::new().post(&alt_url).send() {
-            if resp2.status().is_success() {
-                println!("   ✅ Agent '{}' ({}) deployed via alternate endpoint.", name, job);
-                return Ok(());
-            }
+        if json {
+            let out = LaunchJson {
+                agent: name.to_string(),
+                room: room.to_string(),
+                job: job.to_string(),
+                success: true,
+                message: Some("Agent deployed successfully".to_string()),
+                timestamp: now,
+            };
+            println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        } else {
+            if !json { println!("   ✅ Agent '{}' ({}) deployed to '{}'", name, job, room); }
+            println!();
+            println!("   Run 'keel probe --room {}' to verify presence.", room);
         }
+        return Ok(());
+    }
+
+    // Try alternate endpoint
+    let alt_url = format!("{}/connect?agent={}&room={}&job={}", srv, name, room, job);
+    if let Ok(resp2) = client.post(&alt_url).send() {
+        if resp2.status().is_success() {
+            if json {
+                let out = LaunchJson {
+                    agent: name.to_string(),
+                    room: room.to_string(),
+                    job: job.to_string(),
+                    success: true,
+                    message: Some("Agent deployed via alternate endpoint".to_string()),
+                    timestamp: now,
+                };
+                println!("{}", serde_json::to_string_pretty(&out).unwrap());
+            } else {
+                if !json { println!("   ✅ Agent '{}' ({}) deployed via alternate endpoint.", name, job); }
+            }
+            return Ok(());
+        }
+    }
+
+    if json {
+        let out = LaunchJson {
+            agent: name.to_string(),
+            room: room.to_string(),
+            job: job.to_string(),
+            success: false,
+            message: Some(format!("Launch failed: {} — {}", status, body)),
+            timestamp: now,
+        };
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    } else {
         println!("   ⚠️  Launch failed: {} — {}", status, body);
         println!("   Check that room '{}' exists on PLATO at {}", room, srv);
     }
 
-    println!();
-    println!("   Launch date: {}", now);
     Ok(())
 }
 
-fn cmd_sync(server: &str) -> Result<(), String> {
+fn cmd_sync(server: &str, timeout: Option<u64>, json: bool) -> Result<(), String> {
     let srv = config_server(server);
     let cfg = KeelConfig::load()?;
     let now = Utc::now().to_rfc3339();
+    let timeout = timeout.unwrap_or(5);
 
-    println!("🔮 Syncing to PLATO at {}", srv);
+    if !json { println!("🔮 Syncing to PLATO at {}", srv); }
     println!();
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout))
+        .build().map_err(|e| format!("HTTP client: {}", e))?;
 
     // Check PLATO is alive
     match plato::get_status(&srv) {
         Ok(status) => {
             let room_count = status.rooms.as_ref().map(|r| r.len()).unwrap_or(0);
-            println!("   PLATO: {} room(s) active", room_count);
-            if let Some(ref ver) = status.version {
-                println!("   Version: {}", ver);
+            if json {
+                // JSON output happens at the end
+            } else {
+                println!("   PLATO: {} room(s) active", room_count);
+                if let Some(ref ver) = status.version {
+                    println!("   Version: {}", ver);
+                }
             }
         }
         Err(e) => {
-            println!("   ⚠️  Cannot reach PLATO: {}", e);
-            println!("   Sync aborted.");
+            if json {
+                let out = serde_json::json!({
+                    "error": format!("Cannot reach PLATO: {}", e),
+                    "server": srv,
+                });
+                println!("{}", serde_json::to_string_pretty(&out).unwrap());
+            } else {
+                println!("   ⚠️  Cannot reach PLATO: {}", e);
+                println!("   Sync aborted.");
+            }
             return Ok(());
         }
     }
@@ -722,19 +1253,15 @@ fn cmd_sync(server: &str) -> Result<(), String> {
     };
 
     let room_name = format!("keel_{}", cfg.name.replace('-', "_").to_lowercase());
-    match plato::submit_tile(&room_name, &identity_tile, &srv) {
-        Ok(resp) => {
-            println!("   ✅ Identity tile synced to room '{}'", resp.room);
-        }
-        Err(e) => {
-            println!("   ⚠️  Identity sync failed: {}", e);
-        }
-    }
+    let url = format!("{}/room/{}/submit", srv, room_name);
+    let identity_synced = client.post(&url).json(&identity_tile).send()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
 
     // Sync local tiles from ~/.keel/rooms/
     let rooms_dir = KeelConfig::path().parent().unwrap().join("rooms");
+    let mut synced = 0usize;
     if rooms_dir.exists() {
-        let mut synced = 0usize;
         if let Ok(entries) = fs::read_dir(&rooms_dir) {
             for entry_res in entries.flatten() {
                 let room_file = entry_res.path();
@@ -743,16 +1270,35 @@ fn cmd_sync(server: &str) -> Result<(), String> {
                 }
                 if let Ok(content) = fs::read_to_string(&room_file) {
                     if let Ok(tile) = serde_json::from_str::<plato::PlatoTile>(&content) {
-                        if plato::submit_tile(&room_name, &tile, &srv).is_ok() {
+                        if client.post(&url).json(&tile).send().map(|r| r.status().is_success()).unwrap_or(false) {
                             synced += 1;
                         }
                     }
                 }
             }
         }
-        if synced > 0 {
-            println!("   Synced {} local tile(s) from ~/.keel/rooms/", synced);
-        }
+    }
+
+    if json {
+        let out = SyncJson {
+            server: srv,
+            room_count: 0, // filled below if needed
+            identity_synced,
+            tiles_synced: synced,
+            member: cfg.name,
+            timestamp: now,
+        };
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return Ok(());
+    }
+
+    if identity_synced {
+        println!("   ✅ Identity tile synced to room '{}'", room_name);
+    } else {
+        println!("   ⚠️  Identity sync failed.");
+    }
+    if synced > 0 {
+        println!("   Synced {} local tile(s) from ~/.keel/rooms/", synced);
     }
 
     println!();
@@ -768,38 +1314,35 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match &cli.command {
-        Commands::Init { name, server } => cmd_init(name, server),
+        Commands::Init { name, server, json } => cmd_init(name, server, *json),
 
-        Commands::Status {} => cmd_status(),
+        Commands::Status { watch, json } => cmd_status(*watch, *json),
 
-        Commands::Bear { path, ttl } => {
-            cmd_bear(path.as_deref().unwrap_or("."), *ttl)
+        Commands::Bear { path, ttl, json } => {
+            cmd_bear(path.as_deref().unwrap_or("."), *ttl, *json)
         }
 
-        Commands::Field {} => cmd_field(),
+        Commands::Field { graph, json } => cmd_field(*graph, *json),
 
-        Commands::Probe { room } => {
-            let server = room
-                .as_ref()
-                .map(|_| plato_url())
-                .unwrap_or_else(|| plato_url());
-            cmd_probe(room.clone(), &server)
+        Commands::Probe { room, json } => {
+            let server = plato_url();
+            cmd_probe(room.clone(), &server, *json)
         }
 
-        Commands::Prune { room, target } => {
-            cmd_prune(room, target, &plato_url())
+        Commands::Prune { room, target, timeout, json } => {
+            cmd_prune(room, target, *timeout, *json)
         }
 
-        Commands::Refit { room, config } => {
-            cmd_refit(room, config.clone(), &plato_url())
+        Commands::Refit { room, config, timeout, json } => {
+            cmd_refit(room, config.clone(), *timeout, *json)
         }
 
-        Commands::Launch { room, name, job } => {
-            cmd_launch(room, name, job, &plato_url())
+        Commands::Launch { room, name, job, timeout, json } => {
+            cmd_launch(room, name, job, *timeout, *json)
         }
 
-        Commands::Sync { server } => {
-            cmd_sync(server.as_deref().unwrap_or(&plato_url()))
+        Commands::Sync { server, timeout, json } => {
+            cmd_sync(server.as_deref().unwrap_or(&plato_url()), *timeout, *json)
         }
     };
 

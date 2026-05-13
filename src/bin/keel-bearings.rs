@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
 
 /// A simplified bearing observation between two agents.
 struct Bearing {
@@ -64,7 +63,7 @@ fn scan_directory(path: &str) -> Vec<Bearing> {
             if let Ok(content) = fs::read_to_string(entry.path()) {
                 let parts: Vec<&str> = content.trim().split('|').collect();
                 if parts.len() >= 3 {
-                    if let (Ok(angle), Ok(rate)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                    if let (Ok(angle), Ok(_rate)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
                         let mtime = entry.metadata().ok()
                             .and_then(|m| m.modified().ok())
                             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);

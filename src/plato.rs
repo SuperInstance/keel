@@ -15,12 +15,14 @@ pub struct PlatoTile {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct PlatoRoom {
     pub tiles: Vec<PlatoTile>,
     pub tile_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct PlatoSubmitResponse {
     pub status: String,
     pub room: String,
@@ -28,6 +30,7 @@ pub struct PlatoSubmitResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct PlatoStatus {
     pub status: Option<String>,
     pub rooms: Option<HashMap<String, serde_json::Value>>,
@@ -36,6 +39,7 @@ pub struct PlatoStatus {
 }
 
 /// Default PLATO server URL
+#[allow(dead_code)]
 const PLATO_URL: &str = "http://localhost:8847";
 
 /// Submit a tile to a PLATO room.
@@ -56,6 +60,7 @@ pub fn submit_tile(room: &str, tile: &PlatoTile, server: &str) -> Result<PlatoSu
 }
 
 /// Fetch all tiles from a PLATO room.
+#[allow(dead_code)]
 pub fn get_room(room: &str, server: &str) -> Result<PlatoRoom, String> {
     let url = format!("{}/room/{}", server.trim_end_matches('/'), room);
     let resp = reqwest::blocking::get(&url)
@@ -78,6 +83,7 @@ pub fn get_status(server: &str) -> Result<PlatoStatus, String> {
 
 /// Sync the local build record to a PLATO room.
 /// Creates one tile per refit entry.
+#[allow(dead_code)]
 pub fn sync_build_record(project_name: &str, refits_dir: &std::path::Path, server: &str) -> Result<usize, String> {
     let room_name = format!("keel_{}", project_name.replace('-', "_").to_lowercase());
     let mut synced = 0usize;
@@ -113,6 +119,7 @@ pub fn sync_build_record(project_name: &str, refits_dir: &std::path::Path, serve
 
 /// Fetch bearing observations from a PLATO room.
 /// Each tile with domain "bearing" is parsed.
+#[allow(dead_code)]
 pub fn fetch_bearings(room: &str, server: &str) -> Result<Vec<BearingObs>, String> {
     let room_data = get_room(room, server)?;
     let mut bearings = Vec::new();
@@ -138,6 +145,7 @@ pub fn fetch_bearings(room: &str, server: &str) -> Result<Vec<BearingObs>, Strin
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BearingObs {
     pub agent_a: String,
     pub agent_b: String,
@@ -146,6 +154,7 @@ pub struct BearingObs {
     pub source: String,
 }
 
+#[allow(dead_code)]
 pub fn collision_risk(angle: f64, rate: f64) -> &'static str {
     if rate.abs() < 0.01 && angle.abs() < 1.0 {
         "COLLISION"
