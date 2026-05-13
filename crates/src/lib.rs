@@ -46,8 +46,8 @@ pub enum Risk {
 /// Dead tiles don't need removal — they're invisible. Compaction is optional.
 ///
 /// ```
-/// use keel_core::*;
-/// use chrono::{Utc, Duration};
+/// use keel_ttl::*;
+/// use chrono::{Duration, Utc};
 ///
 /// let tile = TileTtl::new("hello", Duration::hours(1));
 /// assert!(tile.is_alive());

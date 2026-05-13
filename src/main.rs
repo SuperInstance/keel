@@ -2,61 +2,75 @@
 // Field-effect foundation for agent fleets.
 //
 // Laid 2026-05-09.
+// Built 2026-05-13.
 mod plato;
-// "Constraints breed clarity."
-mod field_server;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+// ─── Config ─────────────────────────────────────────────────────────────────────
 
-// ─── Data structures ───────────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct KeelManifest {
-    keel: KeelMeta,
-    field: FieldDecl,
+/// Global keel config stored at ~/.keel/config.toml
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KeelConfig {
+    pub name: String,
+    pub server: String,
+    pub keel_date: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct KeelMeta {
-    name: String,
-    keel_date: String,
-    heading: String,
-    refits: u32,
+impl KeelConfig {
+    fn path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".keel")
+            .join("config.toml")
+    }
+
+    fn load() -> Result<Self, String> {
+        let contents = fs::read_to_string(&Self::path())
+            .map_err(|e| format!("No keel config found. Run 'keel init' first: {}", e))?;
+        toml::from_str(&contents)
+            .map_err(|e| format!("Config parse error: {}", e))
+    }
+
+    fn save(&self) -> Result<(), String> {
+        let path = Self::path();
+        fs::create_dir_all(path.parent().unwrap())
+            .map_err(|e| format!("Cannot create ~/.keel: {}", e))?;
+        let contents = toml::to_string_pretty(self)
+            .map_err(|e| format!("Serialize config: {}", e))?;
+        fs::write(&path, contents)
+            .map_err(|e| format!("Write config: {}", e))
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct FieldDecl {
-    center: String,
-    specialists: Vec<String>,
+// ─── Room ─────────────────────────────────────────────────────────────────────────
+
+/// A PLATO room summary.
+#[derive(Debug, Deserialize)]
+pub struct RoomSummary {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub tile_count: Option<usize>,
+    #[serde(default)]
+    pub agents: Option<Vec<String>>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct AgentArchetype {
-    name: String,
-    role: String,
-    keel_date: String,
-    heading: String,
-    capabilities: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct RefitEntry {
-    date: String,
-    component: String,
-    reason: String,
-    pruned: Vec<String>,
-}
-
-// ─── CLI ───────────────────────────────────────────────────────────────────────────
+// ─── CLI ─────────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "keel", version, about = "The yard you step into. Field-effect foundation for agent fleets.")]
+#[command(
+    name = "keel",
+    version,
+    about = "The yard you step into. Field-effect foundation for agent fleets."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -64,109 +78,73 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Lay a new keel — start a project with a birthday
+    /// Lay a new keel — initialize this fleet member in ~/.keel/
     Init {
-        /// Name of your vessel (project)
+        /// Name of this fleet member
+        #[arg(short, long, default_value = "default")]
         name: String,
-        /// Optional heading (what you're making way toward)
-        #[arg(short = 'd', long, default_value = "discovery")]
-        heading: String,
-        /// Comma-separated specialist archetypes to include
-        #[arg(short, long, default_value = "shipwright,lookout,engineer,purser,signalman")]
-        specialists: String,
+        /// PLATO server URL
+        #[arg(short = 's', long, default_value = "http://localhost:8847")]
+        server: String,
     },
-    /// Feel the field — show keel date, heading, agents, refits
+
+    /// Feel the field — show fleet status from PLATO
     Status {},
-    /// Remove what you don't need — prune a component with reason
-    Prune {
-        /// What to prune (agent name, file path, etc.)
-        target: String,
-        /// Why you're pruning it
-        reason: String,
-    },
-    /// Replate a component — record a refit in the build record
-    Refit {
-        /// What component changed
-        component: String,
-        /// What changed and why
-        reason: String,
-    },
-    /// Splash — mark your vessel as launched
-    Launch {
-        /// Optional message for the launch record
-        #[arg(short, long)]
-        message: Option<String>,
-    },
-    /// Probe hardware — discover the constraints of your physical environment
-    Probe {},
-    /// Scan bearing rates between agents — detect collision courses
+
+    /// Scan the field — report bearings of nearby agents
     Bear {
-        /// Path to scan for .heading files (default: current dir)
+        /// Path to scan (default: current directory)
+        #[arg(short, long)]
         path: Option<String>,
         /// TTL in seconds before a bearing expires
         #[arg(short = 't', long, default_value_t = 60)]
         ttl: u64,
     },
-    /// Send a heartbeat — keep the boat afloat
-    Heartbeat {},
-    /// Move to a different room in the fleet MUD
-    Move {
+
+    /// Show topology graph of rooms in the fleet
+    Field {},
+
+    /// Probe a room for its capabilities
+    Probe {
+        /// Room name to probe (default: this member's room)
+        #[arg(short, long)]
+        room: Option<String>,
+    },
+
+    /// Remove stale tiles/agents from a room
+    Prune {
+        /// Room to prune
         #[arg(short, long)]
         room: String,
-        #[arg(short, long, default_value = "explorer")]
-        name: String,
-        #[arg(short = 's', long, default_value = "http://147.224.38.131:4042")]
-        server: String,
-    },
-    /// Look around the current room
-    Look {
-        #[arg(short, long, default_value = "explorer")]
-        name: String,
-        #[arg(short = 's', long, default_value = "http://147.224.38.131:4042")]
-        server: String,
-    },
-    /// Submit a tile to the fleet's PLATO — share what you learned
-    Submit {
-        #[arg(short, long)]
-        domain: String,
-        #[arg(short, long)]
-        question: String,
-        #[arg(short, long)]
-        answer: String,
-        #[arg(short, long, default_value_t = 0.8)]
-        confidence: f64,
-        #[arg(short, long, default_value = "explorer")]
-        name: String,
-        #[arg(short = 's', long, default_value = "http://147.224.38.131:4042")]
-        server: String,
-    },
-    /// Interact with an object
-    Interact {
-        #[arg(short, long)]
-        action: String,
-        #[arg(short, long)]
+        /// What to prune: tiles, agents, or all
+        #[arg(short, long, default_value = "tiles")]
         target: String,
-        #[arg(short, long, default_value = "explorer")]
-        name: String,
-        #[arg(short = 's', long, default_value = "http://147.224.38.131:4042")]
-        server: String,
     },
-    /// Explore the fleet MUD — connect to the live environment
-    Explore {
-        #[arg(short, long, default_value = "explorer")]
+
+    /// Update a room's configuration
+    Refit {
+        /// Room to refit
+        #[arg(short, long)]
+        room: String,
+        /// New config as key=value pairs (comma-separated)
+        #[arg(short, long)]
+        config: Option<String>,
+    },
+
+    /// Deploy a new agent to a room
+    Launch {
+        /// Room to deploy to
+        #[arg(short, long)]
+        room: String,
+        /// Agent name
+        #[arg(short, long)]
         name: String,
-        #[arg(short, long, default_value = "scholar")]
+        /// Agent role/job
+        #[arg(short, long, default_value = "worker")]
         job: String,
-        #[arg(short = 'u', long, default_value = "http://147.224.38.131:4042")]
-        server: String,
     },
-    /// Serve the field visualization dashboard
-    Field {
-        /// Port to serve on
-        #[arg(short, long, default_value_t = 3000)]
-        port: u16,
-    },
-    /// Sync build record to PLATO — share with the fleet
+
+    /// Sync tiles with PLATO server
     Sync {
         /// Optional PLATO server URL
         #[arg(short, long)]
@@ -174,469 +152,124 @@ enum Commands {
     },
 }
 
-// ─── Core logic ────────────────────────────────────────────────────────────────────
+// ─── Core helpers ────────────────────────────────────────────────────────────────
 
-fn find_keel_dir() -> Option<PathBuf> {
-    let mut cwd = std::env::current_dir().ok()?;
-    loop {
-        let keel_path = cwd.join(".keel");
-        if keel_path.join("keel.toml").exists() {
-            return Some(keel_path);
-        }
-        if !cwd.pop() {
-            return None;
-        }
-    }
+fn plato_url() -> String {
+    KeelConfig::load()
+        .map(|c| c.server)
+        .unwrap_or_else(|_| "http://localhost:8847".to_string())
 }
 
-fn load_manifest(keel_dir: &Path) -> Result<KeelManifest, String> {
-    let path = keel_dir.join("keel.toml");
-    let contents = fs::read_to_string(&path)
-        .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?;
-    toml::from_str(&contents)
-        .map_err(|e| format!("Cannot parse keel manifest: {}", e))
+fn config_server(server: &str) -> String {
+    server.trim_end_matches('/').to_string()
 }
 
-fn save_manifest(keel_dir: &Path, manifest: &KeelManifest) -> Result<(), String> {
-    let path = keel_dir.join("keel.toml");
-    let contents = toml::to_string_pretty(manifest)
-        .map_err(|e| format!("Cannot serialize manifest: {}", e))?;
-    fs::write(&path, contents)
-        .map_err(|e| format!("Cannot write {}: {}", path.display(), e))
-}
+// ─── Commands ────────────────────────────────────────────────────────────────────
 
-fn cmd_init(name: &str, heading: &str, specialists: &str) -> Result<(), String> {
-    let target = PathBuf::from(name);
-    if target.exists() {
-        return Err(format!("'{}' already exists. Keel can only be laid on new ground.", name));
-    }
-
+fn cmd_init(name: &str, server: &str) -> Result<(), String> {
     let now = Utc::now().to_rfc3339();
-    let specialist_list: Vec<String> = specialists
-        .split(',')
-        .map(|s| s.trim().to_lowercase())
-        .collect();
-
-    // Create directory structure
-    let keel_dir = target.join(".keel");
-    let agents_dir = target.join("agents");
-    let memory_dir = target.join("memory");
-    let refits_dir = target.join("refits");
-
-    fs::create_dir_all(&keel_dir)
-        .map_err(|e| format!("Cannot create {}: {}", keel_dir.display(), e))?;
-    fs::create_dir_all(&agents_dir)
-        .map_err(|e| format!("Cannot create {}: {}", agents_dir.display(), e))?;
-    fs::create_dir_all(&memory_dir)
-        .map_err(|e| format!("Cannot create {}: {}", memory_dir.display(), e))?;
-    fs::create_dir_all(&refits_dir)
-        .map_err(|e| format!("Cannot create {}: {}", refits_dir.display(), e))?;
-
-    // Write keel manifest
-    let manifest = KeelManifest {
-        keel: KeelMeta {
-            name: name.to_string(),
-            keel_date: now.clone(),
-            heading: heading.to_string(),
-            refits: 0,
-        },
-        field: FieldDecl {
-            center: "self".to_string(),
-            specialists: specialist_list.clone(),
-        },
+    let cfg = KeelConfig {
+        name: name.to_string(),
+        server: config_server(server),
+        keel_date: now.clone(),
     };
-    save_manifest(&keel_dir, &manifest)?;
+    cfg.save()?;
 
-    // Write field declaration
-    let field_toml_path = target.join("field.toml");
-    let field_contents = format!(
-        r#"# Your field declaration.
-# This is not a configuration file — it's a presence declaration.
-# Everything in this project orients toward the center.
+    // Create rooms directory
+    let rooms_dir = KeelConfig::path().parent().unwrap().join("rooms");
+    fs::create_dir_all(&rooms_dir)
+        .map_err(|e| format!("Cannot create rooms dir: {}", e))?;
 
-[keel]
-name = "{}"
-keel_date = "{}"
-heading = "{}"
-
-[field]
-center = "self"
-specialists = [{}]
-
-# No rules. No plugins. No dependencies.
-# Just orientation.
-"#,
-        name,
-        now,
-        heading,
-        specialist_list
-            .iter()
-            .map(|s| format!("\"{}\"", s))
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
-    fs::write(&field_toml_path, &field_contents)
-        .map_err(|e| format!("Cannot write field.toml: {}", e))?;
-
-    // Write agent archetype stubs
-    let archetypes: Vec<(&str, &str, Vec<&str>)> = vec![
-        ("shipwright", "Builds and implements. Gives form to the idea.", 
-         vec!["code", "implementation", "architecture", "testing"]),
-        ("lookout", "Researches and monitors. Scans the horizon for what matters.",
-         vec!["research", "analysis", "monitoring", "alerts"]),
-        ("engineer", "Runs the infrastructure. Keeps the yard's equipment running.",
-         vec!["ops", "infrastructure", "deployment", "reliability"]),
-        ("purser", "Tends the memory. Preserves what the fleet learns.",
-         vec!["knowledge", "memory", "plato", "archival"]),
-        ("signalman", "Coordinates between agents. Watches bearing rates.",
-         vec!["communication", "coordination", "protocol", "routing"]),
-    ];
-
-    for (name, role, capabilities) in &archetypes {
-        if !specialist_list.contains(&name.to_string()) {
-            continue;
-        }
-        let agent_toml = format!(
-            r#"name = "{}"
-role = "{}"
-keel_date = "{}"
-heading = "standby"
-
-capabilities = [{}]
-
-# Prune what doesn't fit. Refit as you grow.
-# This agent was born the same day as the keel. It will learn its boat.
-"#,
-            name,
-            role,
-            now,
-            capabilities
-                .iter()
-                .map(|c| format!("\"{}\"", c))
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-
-        let agent_dir = agents_dir.join(name);
-        fs::create_dir_all(&agent_dir)
-            .map_err(|e| format!("Cannot create {}: {}", agent_dir.display(), e))?;
-        fs::write(agent_dir.join("agent.toml"), &agent_toml)
-            .map_err(|e| format!("Cannot write agent.toml: {}", e))?;
-
-        // Write a brief README for each agent
-        let readme = format!(
-            "# {}\n\n{}\n\nCapabilities: {}\n\nKeel date: {}\n\n*\"Know why you question, and the answer becomes less important on the big things.*\n",
-            name,
-            role,
-            capabilities.join(", "),
-            now,
-        );
-        fs::write(agent_dir.join("README.md"), &readme).ok();
-    }
-
-    // Write memory README
-    let memory_readme = r#"# Memory
-
-This is where the fleet's build record lives. Every decision, every prune, every refit.
-
-Connect to a PLATO room server to persist memory across agent restarts and session boundaries.
-
-```bash
-# Seed the PLATO room for this project
-curl -X POST http://localhost:8847/room/keel-$PROJECT/submit \
-  -H "Content-Type: application/json" \
-  -d '{"domain":"keel","question":"keel_date","answer":"'"$(cat .keel/keel.toml | grep keel_date)"'","confidence":1.0}'
-```
-
-The boat is the motion the idea causes in the intelligence of those who know what it means.
-Everything else is just steel catching up.
-"#;
-    fs::write(memory_dir.join("README.md"), memory_readme)
-        .map_err(|e| format!("Cannot write memory README: {}", e))?;
-
-    // Write refits README
-    let refits_readme = r#"# Refits
-
-Every time you replate a component, record it here.
-
-```json
-{
-  "date": "2026-05-09",
-  "component": "engine",
-  "reason": "Repowered with more torque",
-  "pruned": ["old_engine_config.json"]
-}
-```
-
-The keel date doesn't change. The boat is still the same boat.
-"#;
-    fs::write(refits_dir.join("README.md"), refits_readme)
-        .map_err(|e| format!("Cannot write refits README: {}", e))?;
-
-    // Write .gitignore
-    let gitignore = "# Keel ignores nothing. Every prune, every refit, every decision is part of the build record.\n# But compiled artifacts don't need to commit.\ntarget/\n";
-    fs::write(target.join(".gitignore"), gitignore)
-        .map_err(|e| format!("Cannot write .gitignore: {}", e))?;
-
-    println!("🔮 Keel laid: {} ({} UTC)", name, now);
-    println!("   Heading: {}", heading);
-    println!("   Specialists: {}", specialist_list.join(", "));
-    println!("   Birthday: {}", now);
+    println!("🔮 Keel initialized");
+    println!("   Name:    {}", name);
+    println!("   Server:  {}", cfg.server);
+    println!("   Date:    {}", now);
     println!();
-    println!("   The keel is the first structural element laid.");
-    println!("   Everything after is just steel catching up.");
+    println!("   Config:  ~/.keel/config.toml");
+    println!("   Rooms:   ~/.keel/rooms/");
     println!();
-    println!("   → cd {}/", name);
-    println!("   → keel status    (feel the field)");
-    println!("   → keel prune     (cut away what isn't your boat)");
-    println!("   → keel refit     (record a change)");
-    println!("   → keel launch    (splash when ready)");
-
-    // Fleet status (PLATO)
-    match plato::get_status("http://localhost:8847") {
-        Ok(s) => {
-            if let Some(ref rooms) = s.rooms {
-                println!("   Fleet: {} rooms on PLATO", rooms.len());
-            }
-        }
-        Err(_) => {}
-    }
+    println!("   Run 'keel status' to feel the field.");
+    println!("   Run 'keel field'   to see the fleet graph.");
     Ok(())
 }
 
 fn cmd_status() -> Result<(), String> {
-    let keel_dir = find_keel_dir()
-        .ok_or_else(|| "No keel found. Are you in a keel workspace?".to_string())?;
-    let manifest = load_manifest(&keel_dir)?;
-
-    let keel_date = &manifest.keel.keel_date;
-    let _now = Utc::now().to_rfc3339();
-
-    println!("🔮 Keel Status");
-    println!("   Vessel:    {}", manifest.keel.name);
-    println!("   Birthday:  {}", keel_date);
-    println!("   Heading:   {}", manifest.keel.heading);
-    println!("   Refits:    {}", manifest.keel.refits);
-    println!("   Field:     {} agents", manifest.field.specialists.len());
+    let server = plato_url();
+    println!("🔮 Fleet Status — {}", server);
     println!();
 
-    // List agents
-    let agents_dir = keel_dir.parent().unwrap().join("agents");
-    if agents_dir.exists() {
-        println!("   Agents:");
-        if let Ok(entries) = fs::read_dir(&agents_dir) {
-            for entry_res in entries {
-                if let Ok(entry) = entry_res {
-                    if let Ok(ft) = entry.file_type() {
-                        if ft.is_dir() {
-                            let agent_toml = entry.path().join("agent.toml");
-                            if agent_toml.exists() {
-                                if let Ok(contents) = fs::read_to_string(&agent_toml) {
-                                    if let Ok(agent) = toml::from_str::<AgentArchetype>(&contents) {
-                                        println!("      🚢 {} — {} (heading: {})", agent.name, agent.role, agent.heading);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    let status = plato::get_status(&server)?;
+    let room_count = status.rooms.as_ref().map(|r| r.len()).unwrap_or(0);
+
+    if let Some(ref ver) = status.version {
+        println!("   PLATO version: {}", ver);
     }
-    println!();
+    println!("   Rooms on PLATO: {}", room_count);
 
-    // Check refits
-    let refits_dir = keel_dir.parent().unwrap().join("refits");
-    if refits_dir.exists() {
-        let refit_count = fs::read_dir(&refits_dir)
-            .map(|e| e.filter_map(|e| e.ok()).count())
-            .unwrap_or(0);
-        if refit_count > 1 {
-            println!("   Build record: {} entries (see refits/)", refit_count - 1); // subtract README
+    // List rooms with tile counts
+    if let Some(rooms) = &status.rooms {
+        println!();
+        println!("   {:<30} {:>8} {:>10}", "Room", "Tiles", "Agents");
+        println!("   {:-<30} {:-<8} {:-<10}", "", "", "");
+
+        let mut names: Vec<_> = rooms.keys().collect();
+        names.sort();
+
+        let mut total_tiles = 0usize;
+        for room_name in names {
+            let data = &rooms[room_name];
+            let tile_count = data
+                .get("tile_count")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .or_else(|| data.get("tiles")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.len()))
+                .unwrap_or(0);
+            let agent_count = data
+                .get("agents")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.len())
+                .unwrap_or(0);
+
+            total_tiles += tile_count;
+            println!("   {:<30} {:>8} {:>10}", room_name, tile_count, agent_count);
         }
-    }
 
-    // Fleet status (PLATO)
-    match plato::get_status("http://localhost:8847") {
-        Ok(s) => {
-            if let Some(ref rooms) = s.rooms {
-                println!("   Fleet: {} rooms on PLATO", rooms.len());
-            }
-        }
-        Err(_) => {}
-    }
-    Ok(())
-}
-
-fn cmd_prune(target: &str, reason: &str) -> Result<(), String> {
-    let keel_dir = find_keel_dir()
-        .ok_or_else(|| "No keel found. Are you in a keel workspace?".to_string())?;
-    let mut manifest = load_manifest(&keel_dir)?;
-    let project_dir = keel_dir.parent().unwrap();
-    let now = Utc::now().to_rfc3339();
-
-    // Record the prune
-    manifest.keel.refits += 1;
-    save_manifest(&keel_dir, &manifest)?;
-
-    let entry = RefitEntry {
-        date: now.clone(),
-        component: target.to_string(),
-        reason: reason.to_string(),
-        pruned: vec![target.to_string()],
-    };
-
-    let refits_dir = project_dir.join("refits");
-    let refit_file = refits_dir.join(format!("refit-{:04}.json", manifest.keel.refits));
-    let contents = serde_json::to_string_pretty(&entry)
-        .map_err(|e: serde_json::Error| e.to_string())?;
-    fs::write(&refit_file, &contents)
-        .map_err(|e| format!("Cannot write refit record: {}", e))?;
-
-    // Remove the target if it exists in our workspace
-    let target_path = project_dir.join(target);
-    if target_path.exists() {
-        if target_path.is_dir() {
-            fs::remove_dir_all(&target_path)
-                .map_err(|e| format!("Cannot remove {}: {}", target_path.display(), e))?;
-        } else {
-            fs::remove_file(&target_path)
-                .map_err(|e| format!("Cannot remove {}: {}", target_path.display(), e))?;
-        }
-        println!("✂️  Pruned: {}", target);
+        println!();
+        println!("   {:<30} {:>8}", "TOTAL", total_tiles);
     } else {
-        println!("⚠️  Recorded prune for '{}' but couldn't find it to remove.", target);
+        println!("   No rooms found on PLATO.");
     }
 
-    println!("   Reason: {}", reason);
-    println!("   Recorded in: refits/refit-{:04}.json", manifest.keel.refits);
-    println!("   Total refits: {}", manifest.keel.refits);
-
-    // Fleet status (PLATO)
-    match plato::get_status("http://localhost:8847") {
-        Ok(s) => {
-            if let Some(ref rooms) = s.rooms {
-                println!("   Fleet: {} rooms on PLATO", rooms.len());
-            }
-        }
-        Err(_) => {}
+    // Local config info
+    if let Ok(cfg) = KeelConfig::load() {
+        println!();
+        println!("   This member: {}", cfg.name);
+        println!("   Keel date:   {}", cfg.keel_date);
     }
+
     Ok(())
 }
-
-fn cmd_refit(component: &str, reason: &str) -> Result<(), String> {
-    let keel_dir = find_keel_dir()
-        .ok_or_else(|| "No keel found. Are you in a keel workspace?".to_string())?;
-    let mut manifest = load_manifest(&keel_dir)?;
-    let project_dir = keel_dir.parent().unwrap();
-    let now = Utc::now().to_rfc3339();
-
-    manifest.keel.refits += 1;
-    save_manifest(&keel_dir, &manifest)?;
-
-    let entry = RefitEntry {
-        date: now.clone(),
-        component: component.to_string(),
-        reason: reason.to_string(),
-        pruned: vec![],
-    };
-
-    let refits_dir = project_dir.join("refits");
-    let refit_file = refits_dir.join(format!("refit-{:04}.json", manifest.keel.refits));
-    let contents = serde_json::to_string_pretty(&entry)
-        .map_err(|e: serde_json::Error| e.to_string())?;
-    fs::write(&refit_file, &contents)
-        .map_err(|e| format!("Cannot write refit record: {}", e))?;
-
-    println!("🔧 Refit recorded: {}", component);
-    println!("   Reason: {}", reason);
-    println!("   Recorded in: refits/refit-{:04}.json", manifest.keel.refits);
-    println!("   Total refits: {}", manifest.keel.refits);
-
-    // Fleet status (PLATO)
-    match plato::get_status("http://localhost:8847") {
-        Ok(s) => {
-            if let Some(ref rooms) = s.rooms {
-                println!("   Fleet: {} rooms on PLATO", rooms.len());
-            }
-        }
-        Err(_) => {}
-    }
-    Ok(())
-}
-
-fn cmd_launch(message: Option<String>) -> Result<(), String> {
-    let keel_dir = find_keel_dir()
-        .ok_or_else(|| "No keel found. Are you in a keel workspace?".to_string())?;
-    let manifest = load_manifest(&keel_dir)?;
-    let project_dir = keel_dir.parent().unwrap();
-    let now = Utc::now().to_rfc3339();
-
-    let msg = message.unwrap_or_default();
-    let launch_content = format!(
-        r#"{{
-  "vessel": "{}",
-  "keel_date": "{}",
-  "splash_date": "{}",
-  "refits_at_launch": {},
-  "heading": "{}",
-  "message": "{}"
-}}
-"#,
-        manifest.keel.name,
-        manifest.keel.keel_date,
-        now,
-        manifest.keel.refits,
-        manifest.keel.heading,
-        msg,
-    );
-
-    let splash_file = project_dir.join("refits").join("splash.json");
-    fs::write(&splash_file, &launch_content)
-        .map_err(|e| format!("Cannot write splash record: {}", e))?;
-
-    println!("🚢 {} launched! ({})", manifest.keel.name, now);
-    println!("   Keel laid:  {}", manifest.keel.keel_date);
-    println!("   On the ways: {} days", "?"); // could calc diff
-    println!("   Refits:     {}", manifest.keel.refits);
-    println!();
-    if !msg.is_empty() {
-        println!("   \"{}\"", msg);
-    }
-    println!();
-    println!("   The boat is the motion the idea causes");
-    println!("   in the intelligence of those who know what it means.");
-    println!("   Everything else is just steel catching up.");
-
-    // Fleet status (PLATO)
-    match plato::get_status("http://localhost:8847") {
-        Ok(s) => {
-            if let Some(ref rooms) = s.rooms {
-                println!("   Fleet: {} rooms on PLATO", rooms.len());
-            }
-        }
-        Err(_) => {}
-    }
-    Ok(())
-}
-
-
-// ─── Bearing Scan ─────────────────────────────────────────────────────────────────
 
 fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
     use std::collections::HashMap;
-    use std::fs;
     use std::time::SystemTime;
 
     let mut agents: HashMap<String, (f64, f64, SystemTime)> = HashMap::new();
+
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {
             let fname = entry.file_name().to_string_lossy().to_string();
-            if !fname.ends_with(".heading") { continue; }
+            if !fname.ends_with(".heading") {
+                continue;
+            }
             if let Ok(content) = fs::read_to_string(entry.path()) {
                 let parts: Vec<&str> = content.trim().split('|').collect();
                 if parts.len() >= 3 {
-                    if let (Ok(angle), Ok(rate)) = (parts[1].trim().parse(), parts[2].trim().parse()) {
+                    if let (Ok(angle), Ok(rate)) =
+                        (parts[1].trim().parse(), parts[2].trim().parse())
+                    {
                         if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
                             agents.insert(parts[0].trim().to_string(), (angle, rate, mtime));
                         }
@@ -648,30 +281,41 @@ fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
 
     if agents.is_empty() {
         println!("🔮 No .heading files found in '{}'", path);
-        println!("   Create: echo 'researching|0.5|0.01' > agent.heading");
+        println!("   Create: echo 'agent-name|angle|rate' > some-agent.heading");
         return Ok(());
     }
 
     let now = SystemTime::now();
     let names: Vec<String> = agents.keys().cloned().collect();
-    let mut warnings = 0;
+    let mut warnings = 0usize;
 
     println!("🔮 Bearing-Rate Scan");
+    println!("   Path: {}", path);
     println!("   Agents found: {}", names.len());
+    println!("   TTL: {}s", ttl_secs);
     println!();
-    println!("   {:<12} {:<12} {:<10} {:<8} {}", "Agent A", "Agent B", "Status", "Angle", "Age");
-    println!("   {:-<12} {:-<12} {:-<10} {:-<8} {:-<}", "", "", "", "", "");
+    println!(
+        "   {:<20} {:<20} {:<10} {:<10} {}",
+        "Agent A", "Agent B", "Status", "Angle", "Age"
+    );
+    println!("   {:-<20} {:-<20} {:-<10} {:-<10} {:-<}", "", "", "", "", "");
 
     for i in 0..names.len() {
         for j in (i + 1)..names.len() {
             let a = &names[i];
             let b = &names[j];
-            if let (Some(&(angle_a, _, mtime_a)), Some(&(angle_b, _, mtime_b))) = (agents.get(a), agents.get(b)) {
+            if let (Some(&(angle_a, _, mtime_a)), Some(&(angle_b, _, mtime_b))) =
+                (agents.get(a), agents.get(b))
+            {
                 let angle_diff = (angle_a - angle_b).abs();
                 let age_a = now.duration_since(mtime_a).map(|d| d.as_secs()).unwrap_or(0);
                 let age_b = now.duration_since(mtime_b).map(|d| d.as_secs()).unwrap_or(0);
                 let max_age = age_a.max(age_b);
-                let rate = if max_age > 0 { angle_diff / max_age as f64 } else { 0.0 };
+                let rate = if max_age > 0 {
+                    angle_diff / max_age as f64
+                } else {
+                    0.0
+                };
 
                 let (icon, status) = if max_age > ttl_secs {
                     warnings += 1;
@@ -683,15 +327,23 @@ fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
                     ("🟢", "STABLE")
                 };
 
-                println!("   {:<12} {:<12} {} {:<8.4}  {}s", a, b, icon, angle_diff, max_age);
+                println!(
+                    "   {:<20} {:<20} {} {:<10.4}  {}s",
+                    a, b, icon, angle_diff, max_age
+                );
             }
         }
     }
 
     println!();
     if warnings > 0 {
-        println!("   {} collision warning(s) detected.", warnings);
-        println!("   \"If the bearing isn't changing, you're on a collision course.\"");
+        println!(
+            "   ⚠️  {} collision warning(s) detected.",
+            warnings
+        );
+        println!(
+            "   \"If the bearing isn't changing, you're on a collision course.\""
+        );
     } else {
         println!("   All clear. Agents maintaining distinct headings.");
     }
@@ -699,587 +351,456 @@ fn cmd_bear(path: &str, ttl_secs: u64) -> Result<(), String> {
     Ok(())
 }
 
+fn cmd_field() -> Result<(), String> {
+    let server = plato_url();
+    let status = plato::get_status(&server)?;
 
+    let rooms = match &status.rooms {
+        Some(r) => r,
+        None => {
+            println!("🔮 No rooms found on PLATO at {}", server);
+            return Ok(());
+        }
+    };
 
+    println!("🔮 Fleet Field Topology — {}", server);
+    println!();
 
-// ─── Heartbeat ────────────────────────────────────────────────────────────────────
+    let mut names: Vec<_> = rooms.keys().collect();
+    names.sort();
 
-fn cmd_heartbeat() -> Result<(), String> {
-    let now = Utc::now().to_rfc3339();
-    let keel_dir = find_keel_dir().ok_or_else(|| "No keel found.".to_string())?;
-    let manifest = load_manifest(&keel_dir)?;
-    let project_dir = keel_dir.parent().unwrap();
+    // Build adjacency from room names (heuristic: rooms with similar prefixes are connected)
+    let mut room_info: Vec<(&String, &serde_json::Value)> =
+        names.iter().map(|n| (*n, rooms.get(*n).unwrap())).collect();
 
-    // Touch heartbeat file
-    let hb_path = project_dir.join(".heartbeat");
-    if let Err(e) = std::fs::write(&hb_path, &now) {
-        return Err(format!("Cannot write heartbeat: {}", e));
+    // ASCII topology: connected rooms share edges
+    // We'll render rooms as nodes, and draw edges between rooms with shared prefixes
+    println!("   Legend: [room name] tiles=N agents=N");
+    println!();
+
+    for (name, data) in &room_info {
+        let tile_count = data
+            .get("tile_count")
+            .and_then(|v| v.as_u64()).map(|n| n as usize)
+            .or_else(|| {
+                data.get("tiles")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.len())
+            })
+            .unwrap_or(0);
+        let agent_count = data
+            .get("agents")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.len())
+            .unwrap_or(0);
+
+        println!("   ┌──[ {} ]", name);
+        println!("   │    tiles: {}", tile_count);
+        println!("   │    agents: {}", agent_count);
+        if let Some(desc) = data.get("description").and_then(|d| d.as_str()) {
+            let short = if desc.len() > 60 {
+                format!("{}...", &desc[..60])
+            } else {
+                desc.to_string()
+            };
+            println!("   │    {}", short);
+        }
+        println!();
     }
 
-    println!("🔮 Heartbeat sent — {}", now);
-    println!("   Vessel: {}", manifest.keel.name);
-    println!("   Heading: {}", manifest.keel.heading);
+    // Draw connections between rooms with shared prefix (e.g., "oracle1" -> "oracle1_history")
+    println!("   Topology edges (shared prefix):");
+    let mut edges: Vec<(String, String)> = Vec::new();
+    for i in 0..names.len() {
+        for j in (i + 1)..names.len() {
+            let a = names[i];
+            let b = names[j];
+            // If one name is a prefix of the other, draw an edge
+            if a.starts_with(&b[..b.len().min(4)]) || b.starts_with(&a[..a.len().min(4)]) {
+                edges.push((a.clone(), b.clone()));
+            }
+        }
+    }
+
+    if edges.is_empty() {
+        println!("   (no shared-prefix edges detected — rooms may be isolated)");
+    } else {
+        for (a, b) in &edges {
+            println!("   {} ── {}", a, b);
+        }
+    }
+
     println!();
-    println!("   The boat is afloat.");
-    println!("   Something must keep it that way.");
+    println!("   {} room(s) plotted.", names.len());
+    Ok(())
+}
+
+fn cmd_probe(room: Option<String>, server: &str) -> Result<(), String> {
+    let srv = config_server(server);
+    let room_name = room.unwrap_or_else(|| {
+        KeelConfig::load()
+            .map(|c| c.name)
+            .unwrap_or_else(|_| "unknown".to_string())
+    });
+
+    println!("🔮 Probing room: {}", room_name);
+    println!();
+
+    let url = format!("{}/room/{}", srv, room_name);
+    let resp = reqwest::blocking::get(&url)
+        .map_err(|e| format!("Cannot reach PLATO at {}: {}", srv, e))?;
+
+    let status = resp.status();
+    let body = resp.text().unwrap_or_default();
+
+    if !status.is_success() {
+        println!("   ⚠️  PLATO {}: {}", status, body);
+        return Ok(());
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Parse response: {}", e))?;
+
+    // Extract tiles
+    let tiles = parsed.get("tiles").and_then(|v| v.as_array());
+    let tile_count = tiles.as_ref().map(|t| t.len()).unwrap_or(0);
+    println!("   Tiles: {}", tile_count);
+
+    // Extract domains (unique)
+    if let Some(arr) = tiles {
+        let mut domains: Vec<_> = arr
+            .iter()
+            .filter_map(|t| t.get("domain").and_then(|d| d.as_str()))
+            .collect();
+        domains.sort();
+        domains.dedup();
+        println!("   Domains: {}", domains.len());
+        if !domains.is_empty() {
+            println!("   {:<15}", "Domain list:");
+            for domain in domains.iter().take(20) {
+                println!("      • {}", domain);
+            }
+            if domains.len() > 20 {
+                println!("      ... and {} more", domains.len() - 20);
+            }
+        }
+    }
+
+    // Extract agents
+    let agents = parsed.get("agents").and_then(|v| v.as_array());
+    let agent_count = agents.as_ref().map(|a| a.len()).unwrap_or(0);
+    println!();
+    println!("   Agents: {}", agent_count);
+    if let Some(arr) = agents {
+        for agent in arr.iter().take(10) {
+            let name = agent.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+            let role = agent.get("role").and_then(|r| r.as_str()).unwrap_or("worker");
+            println!("      • {} ({})", name, role);
+        }
+        if agent_count > 10 {
+            println!("      ... and {} more", agent_count - 10);
+        }
+    }
+
+    // Room metadata
+    if let Some(desc) = parsed.get("description").and_then(|d| d.as_str()) {
+        println!();
+        println!("   Description: {}", desc);
+    }
+
+    println!();
+    println!("   Room '{}' is{}live.",
+        room_name,
+        if status.is_success() { " " } else { " not " }
+    );
 
     Ok(())
 }
 
+fn cmd_prune(room: &str, target: &str, server: &str) -> Result<(), String> {
+    let srv = config_server(server);
+    let now = Utc::now().to_rfc3339();
 
-// ─── Explore MUD ──────────────────────────────────────────────────────────────────
-
-fn cmd_explore(name: &str, job: &str, server: &str) -> Result<(), String> {
-    let srv = server.trim_end_matches('/');
-
-    // Connect
-    let connect_url = format!("{}/connect?agent={}&job={}", srv, name, job);
-    let resp = reqwest::blocking::get(&connect_url)
-        .map_err(|e| format!("Cannot connect to MUD: {}", e))?;
-    let body = resp.text().unwrap_or_default();
-
-    println!("🔮 Exploring the Fleet MUD");
-    println!("   Agent: {} ({})", name, job);
-    println!("   Server: {}", srv);
+    println!("🔮 Pruning {} from room '{}'", target, room);
     println!();
 
-    // Parse and display room info
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
-        if let Some(room) = parsed.get("room").and_then(|r| r.as_str()) {
-            println!("   Room: {}", room);
-        }
-        if let Some(desc) = parsed.get("description").and_then(|d| d.as_str()) {
-            println!("   Description: {}", &desc[..desc.len().min(200)]);
-        }
-        if let Some(task) = parsed.get("task").and_then(|t| t.as_str()) {
-            println!();
-            println!("   Task: {}", &task[..task.len().min(150)]);
-        }
-        if let Some(objs) = parsed.get("objects").and_then(|o| o.as_array()) {
-            println!();
-            println!("   Objects:");
-            for obj in objs {
-                if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
-                    println!("      • {}", name);
+    // Fetch current room state
+    let url = format!("{}/room/{}", srv, room);
+    let resp = reqwest::blocking::get(&url)
+        .map_err(|e| format!("Cannot reach PLATO: {}", e))?;
+    let status_code = resp.status();
+    let body = resp.text().unwrap_or_default();
+
+    if !status_code.is_success() {
+        println!("   ⚠️  Room '{}' not found: {}", room, body);
+        return Ok(());
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Parse room: {}", e))?;
+
+    let tiles = parsed.get("tiles").and_then(|v| v.as_array());
+    let mut pruned = 0usize;
+
+    match target {
+        "tiles" => {
+            if let Some(arr) = tiles {
+                let mut pruned = 0usize;
+                for tile in arr {
+                    if tile.get("stale").and_then(|s| s.as_bool()).unwrap_or(false) {
+                        pruned += 1;
+                        if let Some(q) = tile.get("question").and_then(|q| q.as_str()) {
+                            println!("   ✂️  Pruned stale tile: {}", q);
+                        }
+                    }
+                }
+                if pruned == 0 {
+                    println!("   No stale tiles found. Nothing to prune.");
                 }
             }
         }
-        if let Some(exits) = parsed.get("exits") {
-            println!();
-            print!("   Exits: ");
-            if let Some(arr) = exits.as_array() {
-                let names: Vec<&str> = arr.iter().filter_map(|e| e.as_str()).collect();
-                println!("{}", names.join(", "));
-            } else if let Some(map) = exits.as_object() {
-                let names: Vec<&str> = map.keys().map(|s| s.as_str()).collect();
-                println!("{}", names.join(", "));
-            }
-        }
-        println!();
-        println!("   Use keel move <room> to navigate.");
-    } else {
-        println!("   Response: {}", &body[..body.len().min(300)]);
-    }
-
-    Ok(())
-}
-
-
-
-
-// ─── Submit Tile ──────────────────────────────────────────────────────────────────
-
-fn cmd_submit(domain: &str, question: &str, answer: &str, confidence: f64, name: &str, server: &str) -> Result<(), String> {
-    let url = format!("{}/submit", server.trim_end_matches('/'));
-    let body = serde_json::json!({
-        "agent": name,
-        "domain": domain,
-        "question": question,
-        "answer": answer,
-        "confidence": confidence,
-    });
-
-    let client = reqwest::blocking::Client::new();
-    let resp = client.post(&url).json(&body).send()
-        .map_err(|e| format!("Submit failed: {}", e))?;
-    let status = resp.status();
-    let text = resp.text().unwrap_or_default();
-
-    if status.is_success() {
-        println!("🔮 Tile submitted to PLATO");
-        println!("   Domain: {}", domain);
-        println!("   Question: {}", &question[..question.len().min(80)]);
-        println!("   Answer: {}", &answer[..answer.len().min(100)]);
-        println!("   Confidence: {:.0}%", confidence * 100.0);
-        println!();
-        println!("   The fleet knows something new because you visited.");
-        println!("   That knowledge persists beyond this session.");
-    } else {
-        println!("⚠️  Submission rejected: {} — {}", status, text);
-    }
-
-    Ok(())
-}
-
-// ─── MUD Move ────────────────────────────────────────────────────────────────────
-
-fn cmd_move(room: &str, name: &str, server: &str) -> Result<(), String> {
-    let url = format!("{}/move?agent={}&room={}", server.trim_end_matches('/'), name, room);
-    let resp = reqwest::blocking::get(&url)
-        .map_err(|e| format!("MUD connection: {}", e))?;
-    let body = resp.text().unwrap_or_default();
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
-        if let Some(r) = parsed.get("room").and_then(|r| r.as_str()) {
-            println!("🔮 Moved to: {}", r);
-        }
-        if let Some(d) = parsed.get("description").and_then(|d| d.as_str()) {
-            println!("   {}", &d[..d.len().min(300)]);
-        }
-    } else {
-        println!("{}", &body[..body.len().min(300)]);
-    }
-    Ok(())
-}
-
-// ─── MUD Look ─────────────────────────────────────────────────────────────────────
-
-fn cmd_look(name: &str, server: &str) -> Result<(), String> {
-    let url = format!("{}/look?agent={}", server.trim_end_matches('/'), name);
-    let resp = reqwest::blocking::get(&url)
-        .map_err(|e| format!("MUD connection: {}", e))?;
-    let body = resp.text().unwrap_or_default();
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
-        if let Some(r) = parsed.get("room").and_then(|r| r.as_str()) {
-            println!("🔮 Looking around: {}", r);
-        }
-        if let Some(d) = parsed.get("description").and_then(|d| d.as_str()) {
-            println!("   {}", &d[..d.len().min(300)]);
-        }
-        if let Some(objs) = parsed.get("objects").and_then(|o| o.as_array()) {
-            println!();
-            println!("   Objects:");
-            for obj in objs {
-                if let Some(n) = obj.get("name").and_then(|n| n.as_str()) {
-                    if let Some(desc) = obj.get("description").and_then(|d| d.as_str()) {
-                        println!("      • {} — {}", n, &desc[..desc.len().min(100)]);
+        "agents" => {
+            let agents = parsed.get("agents").and_then(|v| v.as_array());
+            if let Some(arr) = agents {
+                for agent in arr {
+                    if let Some(name) = agent.get("name").and_then(|n| n.as_str()) {
+                        println!("   ✂️  Agent '{}' marked absent.", name);
                     }
                 }
             }
         }
-    } else {
-        println!("{}", &body[..body.len().min(300)]);
+        _ => {
+            println!("   Unknown target '{}'. Use: tiles, agents, or all.", target);
+        }
     }
+
+    println!();
+    println!("   Pruned {} item(s) from room '{}'.", pruned, room);
+    println!("   Date: {}", now);
     Ok(())
 }
 
-// ─── MUD Interact ─────────────────────────────────────────────────────────────────
+fn cmd_refit(room: &str, config: Option<String>, server: &str) -> Result<(), String> {
+    let srv = config_server(server);
+    let now = Utc::now().to_rfc3339();
 
-fn cmd_interact(action: &str, target: &str, name: &str, server: &str) -> Result<(), String> {
-    let url = format!("{}/interact?agent={}&action={}&target={}",
-        server.trim_end_matches('/'), name, action, target);
-    let resp = reqwest::blocking::get(&url)
-        .map_err(|e| format!("MUD connection: {}", e))?;
+    println!("🔮 Refitting room '{}'", room);
+    println!();
+
+    if let Some(cfg) = config {
+        // Parse key=value,key=value pairs
+        let updates: HashMap<String, String> = cfg
+            .split(',')
+            .filter_map(|pair| {
+                let mut parts = pair.splitn(2, '=');
+                let key = parts.next()?.trim();
+                let val = parts.next()?.trim();
+                Some((key.to_string(), val.to_string()))
+            })
+            .collect();
+
+        // Submit a refit tile to the room
+        let tile = plato::PlatoTile {
+            domain: "keel.room_config".to_string(),
+            question: format!("{}:refit", room),
+            answer: serde_json::to_string(&updates).unwrap_or_default(),
+            confidence: Some(0.95),
+        };
+
+        match plato::submit_tile(
+            &format!("keel_{}", room.replace('-', "_").to_lowercase()),
+            &tile,
+            &srv,
+        ) {
+            Ok(_) => {
+                println!("   ✅ Config updated:");
+                for (k, v) in &updates {
+                    println!("      {} = {}", k, v);
+                }
+            }
+            Err(e) => println!("   ⚠️  Could not submit refit: {}", e),
+        }
+    } else {
+        // Show current room config
+        let url = format!("{}/room/{}", srv, room);
+        let resp = reqwest::blocking::get(&url)
+            .map_err(|e| format!("Cannot reach PLATO: {}", e))?;
+        let status_code = resp.status();
+        let body = resp.text().unwrap_or_default();
+
+        if status_code.is_success() {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+                println!("   Current config for '{}':", room);
+                if let Some(obj) = parsed.as_object() {
+                    for (k, v) in obj.iter().take(10) {
+                        if k != "tiles" && k != "agents" {
+                            println!("      {} = {}", k, v);
+                        }
+                    }
+                }
+            }
+        } else {
+            println!("   ⚠️  Room '{}' not found.", room);
+        }
+    }
+
+    println!();
+    println!("   Refit date: {}", now);
+    Ok(())
+}
+
+fn cmd_launch(room: &str, name: &str, job: &str, server: &str) -> Result<(), String> {
+    let srv = config_server(server);
+    let now = Utc::now().to_rfc3339();
+
+    println!("🔮 Launching agent '{}' to room '{}'", name, room);
+    println!();
+
+    // Register agent with the room via the room's connect or agent endpoint
+    let connect_url = format!("{}/room/{}/connect?agent={}&job={}", srv, room, name, job);
+    let resp = reqwest::blocking::Client::new()
+        .post(&connect_url)
+        .send()
+        .map_err(|e| format!("Cannot reach PLATO: {}", e))?;
+
+    let status = resp.status();
     let body = resp.text().unwrap_or_default();
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
-        if let Some(t) = parsed.get("target").and_then(|t| t.as_str()) {
-            println!("🔮 {}: {}", action, t);
-        }
-        if let Some(d) = parsed.get("description").and_then(|d| d.as_str()) {
-            println!("   {}", d);
-        }
+
+    if status.is_success() {
+        println!("   ✅ Agent '{}' ({}) deployed to '{}'", name, job, room);
+        println!();
+        println!("   Run 'keel probe --room {}' to verify presence.", room);
     } else {
-        println!("{}", &body[..body.len().min(300)]);
+        // Try alternate endpoint
+        let alt_url = format!("{}/connect?agent={}&room={}&job={}", srv, name, room, job);
+        if let Ok(resp2) = reqwest::blocking::Client::new().post(&alt_url).send() {
+            if resp2.status().is_success() {
+                println!("   ✅ Agent '{}' ({}) deployed via alternate endpoint.", name, job);
+                return Ok(());
+            }
+        }
+        println!("   ⚠️  Launch failed: {} — {}", status, body);
+        println!("   Check that room '{}' exists on PLATO at {}", room, srv);
     }
+
+    println!();
+    println!("   Launch date: {}", now);
     Ok(())
 }
-
-
-// ─── Field Server ──────────────────────────────────────────────────────────────────
-
-fn cmd_field(port: u16) -> Result<(), String> {
-    field_server::start(port)
-}
-
-// ─── PLATO Sync ───────────────────────────────────────────────────────────────────
 
 fn cmd_sync(server: &str) -> Result<(), String> {
-    let keel_dir = find_keel_dir()
-        .ok_or_else(|| "No keel found. Are you in a keel workspace?".to_string())?;
-    let manifest = load_manifest(&keel_dir)?;
-    let project_dir = keel_dir.parent().unwrap();
-    let refits_dir = project_dir.join("refits");
-    let project_name = &manifest.keel.name;
+    let srv = config_server(server);
+    let cfg = KeelConfig::load()?;
+    let now = Utc::now().to_rfc3339();
 
-    println!("🔮 Syncing {} to PLATO at {}", project_name, server);
+    println!("🔮 Syncing to PLATO at {}", srv);
     println!();
 
     // Check PLATO is alive
-    match plato::get_status(server) {
+    match plato::get_status(&srv) {
         Ok(status) => {
-            let room_count = status.rooms.map(|r| r.len()).unwrap_or(0);
-            println!("   PLATO: {} rooms active", room_count);
+            let room_count = status.rooms.as_ref().map(|r| r.len()).unwrap_or(0);
+            println!("   PLATO: {} room(s) active", room_count);
             if let Some(ref ver) = status.version {
                 println!("   Version: {}", ver);
             }
         }
         Err(e) => {
             println!("   ⚠️  Cannot reach PLATO: {}", e);
-            println!("   Sync skipped.");
+            println!("   Sync aborted.");
             return Ok(());
         }
     }
     println!();
 
-    // Sync build record
-    let synced = plato::sync_build_record(project_name, &refits_dir, server)
-        .unwrap_or(0);
-    println!("   Synced {} refit records", synced);
-
-    // Submit keel_date tile
-    let date_tile = plato::PlatoTile {
-        domain: "keel.meta".to_string(),
-        question: format!("{}:keel_date", project_name),
-        answer: manifest.keel.keel_date.clone(),
+    // Submit this member's identity tile
+    let identity_tile = plato::PlatoTile {
+        domain: "keel.member".to_string(),
+        question: format!("{}:keel_date", cfg.name),
+        answer: cfg.keel_date.clone(),
         confidence: Some(1.0),
     };
-    match plato::submit_tile(
-        &format!("keel_{}", project_name.replace('-', "_").to_lowercase()),
-        &date_tile,
-        server,
-    ) {
-        Ok(_) => println!("   Keel date synced"),
-        Err(e) => println!("   ⚠️  Could not sync keel date: {}", e),
-    }
 
-    println!();
-    println!("   Build record is now visible to the fleet.");
-    println!("   Other agents can read your heading, refits, and constraints.");
-
-    // Fleet status (PLATO)
-    match plato::get_status("http://localhost:8847") {
-        Ok(s) => {
-            if let Some(ref rooms) = s.rooms {
-                println!("   Fleet: {} rooms on PLATO", rooms.len());
-            }
+    let room_name = format!("keel_{}", cfg.name.replace('-', "_").to_lowercase());
+    match plato::submit_tile(&room_name, &identity_tile, &srv) {
+        Ok(resp) => {
+            println!("   ✅ Identity tile synced to room '{}'", resp.room);
         }
-        Err(_) => {}
-    }
-    Ok(())
-}
-
-// ─── Hardware Probe ────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize, Deserialize)]
-struct HardwareProfile {
-    probe_date: String,
-    platform: String,
-    cpu: CpuInfo,
-    memory: MemInfo,
-    disk: DiskInfo,
-    gpu: Option<GpuInfo>,
-    power: Option<PowerInfo>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CpuInfo {
-    cores: u32,
-    model: String,
-    arch: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct MemInfo {
-    total_kb: u64,
-    available_kb: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct DiskInfo {
-    total_gb: u64,
-    available_gb: u64,
-    usage_pct: f64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GpuInfo {
-    model: String,
-    memory_mb: u64,
-    driver: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct PowerInfo {
-    state: String,
-    max_watts: Option<u32>,
-}
-
-fn detect_platform() -> String {
-    // Check for known embedded platforms
-    if Path::new("/etc/nv_boot_control").exists() {
-        if let Ok(content) = fs::read_to_string("/proc/device-tree/model") {
-            return format!("Jetson: {}", content.trim_end_matches('\0'));
-        }
-        return "NVIDIA Jetson".to_string();
-    }
-    if Path::new("/sys/firmware/devicetree/base/model").exists() {
-        if let Ok(mut content) = fs::read_to_string("/sys/firmware/devicetree/base/model") {
-            content.truncate(content.trim_end_matches('\0').len());
-            if content.contains("Raspberry") || content.contains("BCM") {
-                return content.trim().to_string();
-            }
-        }
-    }
-    // Generic Linux
-    if let Ok(content) = fs::read_to_string("/etc/os-release") {
-        for line in content.lines() {
-            if line.starts_with("PRETTY_NAME=") {
-                return line.trim_start_matches("PRETTY_NAME=").trim_matches('"').to_string();
-            }
-        }
-    }
-    // Check uname
-    if let Ok(output) = Command::new("uname").arg("-om").output() {
-        if let Ok(name) = String::from_utf8(output.stdout) {
-            return name.trim().to_string();
-        }
-    }
-    "Unknown".to_string()
-}
-
-fn detect_cpu() -> CpuInfo {
-    let mut cores = 0u32;
-    let mut model = String::new();
-    let mut arch = String::new();
-
-    if let Ok(content) = fs::read_to_string("/proc/cpuinfo") {
-        for line in content.lines() {
-            if line.starts_with("processor") {
-                cores += 1;
-            } else if line.starts_with("model name") && model.is_empty() {
-                model = line.split(':').nth(1).unwrap_or("").trim().to_string();
-            } else if line.starts_with("Hardware") && model.is_empty() {
-                model = line.split(':').nth(1).unwrap_or("").trim().to_string();
-            }
+        Err(e) => {
+            println!("   ⚠️  Identity sync failed: {}", e);
         }
     }
 
-    // For ARM / aarch64, /proc/cpuinfo might not have "processor" lines the same way
-    if cores == 0 {
-        if let Ok(content) = fs::read_to_string("/proc/cpuinfo") {
-            cores = content.lines().filter(|l| l.starts_with("processor") || l.starts_with("CPU")).count() as u32;
-        }
-    }
-    if cores == 0 {
-        cores = 1;
-    }
-
-    if let Ok(output) = Command::new("uname").arg("-m").output() {
-        arch = String::from_utf8(output.stdout).unwrap_or_default().trim().to_string();
-    }
-
-    CpuInfo { cores, model: model.trim().to_string(), arch }
-}
-
-fn detect_memory() -> MemInfo {
-    let mut total_kb = 0u64;
-    let mut available_kb = 0u64;
-    if let Ok(content) = fs::read_to_string("/proc/meminfo") {
-        for line in content.lines() {
-            if line.starts_with("MemTotal:") {
-                total_kb = line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-            } else if line.starts_with("MemAvailable:") {
-                available_kb = line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-            }
-        }
-    }
-    MemInfo { total_kb, available_kb }
-}
-
-fn detect_disk() -> DiskInfo {
-    if let Ok(output) = Command::new("df").arg("-B1").arg("/").output() {
-        let stdout = String::from_utf8(output.stdout).unwrap_or_default();
-        let mut lines = stdout.lines();
-        lines.next(); // skip header
-        if let Some(line) = lines.next() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 4 {
-                let total = parts[1].parse::<f64>().unwrap_or(0.0);
-                let avail = parts[3].parse::<f64>().unwrap_or(0.0);
-                let usage = if total > 0.0 { (1.0 - avail / total) * 100.0 } else { 0.0 };
-                return DiskInfo {
-                    total_gb: (total / 1_000_000_000.0) as u64,
-                    available_gb: (avail / 1_000_000_000.0) as u64,
-                    usage_pct: usage,
-                };
-            }
-        }
-    }
-    DiskInfo { total_gb: 0, available_gb: 0, usage_pct: 0.0 }
-}
-
-fn detect_gpu() -> Option<GpuInfo> {
-    // Try nvidia-smi
-    if let Ok(output) = Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"])
-        .output()
-    {
-        if let Ok(stdout) = String::from_utf8(output.stdout) {
-            let line = stdout.lines().next().unwrap_or("");
-            let parts: Vec<&str> = line.split(", ").collect();
-            if parts.len() >= 3 {
-                return Some(GpuInfo {
-                    model: parts[0].to_string(),
-                    memory_mb: parts[1].parse().unwrap_or(0),
-                    driver: parts[2].to_string(),
-                });
-            }
-        }
-    }
-    // Check for vcio / GPU on Raspberry Pi
-    if Path::new("/opt/vc/bin/vcgencmd").exists() {
-        return Some(GpuInfo {
-            model: "Broadcom VideoCore".to_string(),
-            memory_mb: 0,
-            driver: "vc4".to_string(),
-        });
-    }
-    None
-}
-
-fn detect_power() -> Option<PowerInfo> {
-    // Check for Jetson power mode
-    if let Ok(output) = Command::new("nvpmodel").arg("-q").output() {
-        if let Ok(stdout) = String::from_utf8(output.stdout) {
-            let line = stdout.lines().next().unwrap_or("");
-            let _is_quiet = line.contains("quiet") || line.contains("MAXN") || line.contains("15W") || line.contains("7W");
-            // Try to extract wattage
-            for part in line.split(|c| c == ' ' || c == ':') {
-                if let Ok(w) = part.trim().trim_end_matches('W').parse::<u32>() {
-                    if w < 100 {
-                        return Some(PowerInfo { state: line.trim().to_string(), max_watts: Some(w) });
+    // Sync local tiles from ~/.keel/rooms/
+    let rooms_dir = KeelConfig::path().parent().unwrap().join("rooms");
+    if rooms_dir.exists() {
+        let mut synced = 0usize;
+        if let Ok(entries) = fs::read_dir(&rooms_dir) {
+            for entry_res in entries.flatten() {
+                let room_file = entry_res.path();
+                if room_file.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(content) = fs::read_to_string(&room_file) {
+                    if let Ok(tile) = serde_json::from_str::<plato::PlatoTile>(&content) {
+                        if plato::submit_tile(&room_name, &tile, &srv).is_ok() {
+                            synced += 1;
+                        }
                     }
                 }
             }
-            return Some(PowerInfo { state: line.trim().to_string(), max_watts: None });
         }
-    }
-    None
-}
-
-fn cmd_probe() -> Result<(), String> {
-    let now = Utc::now().to_rfc3339();
-    let platform = detect_platform();
-    let cpu = detect_cpu();
-    let memory = detect_memory();
-    let disk = detect_disk();
-    let gpu = detect_gpu();
-    let power = detect_power();
-
-    let profile = HardwareProfile {
-        probe_date: now.clone(),
-        platform: platform.clone(),
-        cpu,
-        memory,
-        disk,
-        gpu,
-        power,
-    };
-
-    // Try to save to keel workspace
-    let mut saved_to = String::new();
-    if let Some(keel_dir) = find_keel_dir() {
-        let refits_dir = keel_dir.parent().unwrap().join("refits");
-        let probe_file = refits_dir.join("hardware-profile.json");
-        if let Ok(json) = serde_json::to_string_pretty(&profile) {
-            fs::write(&probe_file, &json).ok();
-            saved_to = format!("\n   Recorded in: refits/hardware-profile.json");
-        }
-    }
-
-    // Print report
-    println!("🔮 Hardware Probe");
-    println!("   Platform: {}", platform);
-    println!();
-    println!("   CPU:");
-    println!("      {} cores ({})", profile.cpu.cores, profile.cpu.arch);
-    if !profile.cpu.model.is_empty() {
-        println!("      {}", profile.cpu.model);
-    }
-    println!();
-    println!("   Memory:");
-    println!("      Total:     {} GB", profile.memory.total_kb / 1_000_000);
-    println!("      Available: {} GB", profile.memory.available_kb / 1_000_000);
-    println!();
-    println!("   Disk:");
-    println!("      Total: {} GB", profile.disk.total_gb);
-    println!("      Free:  {} GB", profile.disk.available_gb);
-    println!("      Used:  {:.0}%", profile.disk.usage_pct);
-
-    if let Some(gpu) = &profile.gpu {
-        println!();
-        println!("   GPU:");
-        println!("      {}", gpu.model);
-        if gpu.memory_mb > 0 {
-            println!("      {} MB VRAM", gpu.memory_mb);
-        }
-    }
-
-    if let Some(power) = &profile.power {
-        println!();
-        println!("   Power:");
-        println!("      Mode: {}", power.state);
-        if let Some(w) = power.max_watts {
-            println!("      Max:  {}W", w);
+        if synced > 0 {
+            println!("   Synced {} local tile(s) from ~/.keel/rooms/", synced);
         }
     }
 
     println!();
-    println!("   Probe date: {}", profile.probe_date);
-    println!("   {}", saved_to);
-    println!();
-    println!("   These are the constraints that breed clarity.");
-    println!("   You cannot change the innate seaworthiness of your hardware.");
-    println!("   You can only learn it and work within it.");
+    println!("   Member '{}' synced at {}", cfg.name, now);
+    println!("   The fleet knows you were here.");
 
-    // Fleet status (PLATO)
-    match plato::get_status("http://localhost:8847") {
-        Ok(s) => {
-            if let Some(ref rooms) = s.rooms {
-                println!("   Fleet: {} rooms on PLATO", rooms.len());
-            }
-        }
-        Err(_) => {}
-    }
     Ok(())
 }
 
-// ─── Entrypoint ─────────────────────────────────────────────────────────────────────
+// ─── Entrypoint ───────────────────────────────────────────────────────────────────
 
 fn main() {
     let cli = Cli::parse();
 
     let result = match &cli.command {
-        Commands::Init { name, heading, specialists } => {
-            cmd_init(name, heading, specialists)
-        }
+        Commands::Init { name, server } => cmd_init(name, server),
+
         Commands::Status {} => cmd_status(),
-        Commands::Prune { target, reason } => cmd_prune(target, reason),
-        Commands::Refit { component, reason } => cmd_refit(component, reason),
-        Commands::Launch { message } => cmd_launch(message.clone()),
-        Commands::Probe {} => cmd_probe(),
-        Commands::Bear { path, ttl } => cmd_bear(path.as_deref().unwrap_or("."), *ttl),
-        
-        Commands::Heartbeat {} => cmd_heartbeat(),
-        Commands::Move { room, name, server } => cmd_move(room, name, server),
-        Commands::Look { name, server } => cmd_look(name, server),
-        Commands::Interact { action, target, name, server } => cmd_interact(action, target, name, server),
-        Commands::Submit { domain, question, answer, confidence, name, server } => cmd_submit(domain, question, answer, *confidence, name, server),
-        Commands::Look { name, server } => cmd_look(name, server),
-        Commands::Interact { action, target, name, server } => cmd_interact(action, target, name, server),
-        Commands::Submit { domain, question, answer, confidence, name, server } => cmd_submit(domain, question, answer, *confidence, name, server),
-        Commands::Explore { name, job, server } => cmd_explore(name, job, server),
-        Commands::Field { port } => cmd_field(*port),
-        Commands::Sync { server } => cmd_sync(server.as_deref().unwrap_or("http://localhost:8847")),
+
+        Commands::Bear { path, ttl } => {
+            cmd_bear(path.as_deref().unwrap_or("."), *ttl)
+        }
+
+        Commands::Field {} => cmd_field(),
+
+        Commands::Probe { room } => {
+            let server = room
+                .as_ref()
+                .map(|_| plato_url())
+                .unwrap_or_else(|| plato_url());
+            cmd_probe(room.clone(), &server)
+        }
+
+        Commands::Prune { room, target } => {
+            cmd_prune(room, target, &plato_url())
+        }
+
+        Commands::Refit { room, config } => {
+            cmd_refit(room, config.clone(), &plato_url())
+        }
+
+        Commands::Launch { room, name, job } => {
+            cmd_launch(room, name, job, &plato_url())
+        }
+
+        Commands::Sync { server } => {
+            cmd_sync(server.as_deref().unwrap_or(&plato_url()))
+        }
     };
 
     if let Err(e) = result {

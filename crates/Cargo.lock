@@ -126,7 +126,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "keel-core"
+name = "keel-ttl"
 version = "0.1.0"
 dependencies = [
  "chrono",
