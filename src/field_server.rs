@@ -56,7 +56,7 @@ fn handle_request(url: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
     }
     
     // Proxy to PLATO
-    let plato_url = format!("http://localhost:8847{}", url);
+    let plato_url = format!("https://plato.purplepincher.org{}", url);
     match fetch_url(&plato_url) {
         Ok((body, content_type)) => {
             let ct = content_type.unwrap_or_else(|| "application/json".to_string());

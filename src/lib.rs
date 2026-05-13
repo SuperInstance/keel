@@ -19,7 +19,7 @@ mod tests {
 
         let cfg = KeelConfig {
             name: "test-vessel".to_string(),
-            server: "http://localhost:8847".to_string(),
+            server: "https://plato.purplepincher.org".to_string(),
             keel_date: "2026-05-13T00:00:00Z".to_string(),
         };
 
@@ -27,7 +27,7 @@ mod tests {
         let parsed: KeelConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.name, "test-vessel");
-        assert_eq!(parsed.server, "http://localhost:8847");
+        assert_eq!(parsed.server, "https://plato.purplepincher.org");
     }
 
     #[test]
@@ -63,7 +63,7 @@ mod tests {
         }
 
         let status = StatusJson {
-            server: "http://localhost:8847".to_string(),
+            server: "https://plato.purplepincher.org".to_string(),
             version: Some("1.0.0".to_string()),
             total_tiles: 142,
         };
@@ -85,7 +85,7 @@ mod tests {
         }
 
         let sync = SyncJson {
-            server: "http://localhost:8847".to_string(),
+            server: "https://plato.purplepincher.org".to_string(),
             identity_synced: true,
             tiles_synced: 5,
             member: "test-vessel".to_string(),
@@ -289,9 +289,9 @@ mod tests {
             url.trim_end_matches('/').to_string()
         }
 
-        assert_eq!(normalize("http://localhost:8847"), "http://localhost:8847");
-        assert_eq!(normalize("http://localhost:8847/"), "http://localhost:8847");
-        assert_eq!(normalize("http://localhost:8847//"), "http://localhost:8847");
+        assert_eq!(normalize("https://plato.purplepincher.org"), "https://plato.purplepincher.org");
+        assert_eq!(normalize("https://plato.purplepincher.org/"), "https://plato.purplepincher.org");
+        assert_eq!(normalize("https://plato.purplepincher.org//"), "https://plato.purplepincher.org");
     }
 
     #[test]
@@ -300,10 +300,10 @@ mod tests {
             format!("{}/room/{}", server.trim_end_matches('/'), room)
         }
 
-        assert_eq!(room_url("http://localhost:8847", "oracle1"),
-                   "http://localhost:8847/room/oracle1");
-        assert_eq!(room_url("http://localhost:8847/", "oracle1"),
-                   "http://localhost:8847/room/oracle1");
+        assert_eq!(room_url("https://plato.purplepincher.org", "oracle1"),
+                   "https://plato.purplepincher.org/room/oracle1");
+        assert_eq!(room_url("https://plato.purplepincher.org/", "oracle1"),
+                   "https://plato.purplepincher.org/room/oracle1");
     }
 
     // ─── JSON output type tests ───────────────────────────────────────────────

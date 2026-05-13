@@ -40,7 +40,7 @@ pub struct PlatoStatus {
 
 /// Default PLATO server URL
 #[allow(dead_code)]
-const PLATO_URL: &str = "http://localhost:8847";
+const PLATO_URL: &str = "https://plato.purplepincher.org";
 
 /// Submit a tile to a PLATO room.
 pub fn submit_tile(room: &str, tile: &PlatoTile, server: &str) -> Result<PlatoSubmitResponse, String> {

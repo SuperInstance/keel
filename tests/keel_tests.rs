@@ -353,9 +353,9 @@ fn test_sync_custom_server() {
     let home = dirs::home_dir().unwrap().join(".keel_test_sync_server");
     std::env::set_var("HOME", &home);
     
-    keel(&["init", "--name", "test-sync-server", "--server", "http://localhost:8847"]);
+    keel(&["init", "--name", "test-sync-server", "--server", "https://plato.purplepincher.org"]);
     
-    let (_code, _, _) = keel(&["sync", "--server", "http://localhost:8847"]);
+    let (_code, _, _) = keel(&["sync", "--server", "https://plato.purplepincher.org"]);
     // Should accept custom server
 }
 
@@ -445,7 +445,7 @@ fn test_status_json_serialization() {
     }
     
     let json = StatusJson {
-        server: "http://localhost:8847".to_string(),
+        server: "https://plato.purplepincher.org".to_string(),
         version: Some("1.0.0".to_string()),
         rooms: vec![
             RoomJson {
@@ -640,7 +640,7 @@ fn test_refit_config_parsing_edge_cases() {
 fn test_dot_graph_format() {
     // Verify DOT format output structure
     let dot_output = r#"digraph fleet {
-    graph [label="Fleet Field Topology — http://localhost:8847" fontname="monospace"];
+    graph [label="Fleet Field Topology — https://plato.purplepincher.org" fontname="monospace"];
     node [shape=box style=filled fillcolor=lightblue];
     "oracle1" [label="oracle1 (tiles=42, agents=3)"];
     "oracle1_history" [label="oracle1_history (tiles=10, agents=1)"];
