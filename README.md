@@ -1,155 +1,45 @@
-# 🔮 Keel
+# Keel
 
-**The yard you step into. Field-effect foundation for agent fleets.**
+You just walked into a shipyard. There's sawdust in the air and steel underfoot. A foreman looks up from his drawings and hands you a tool. Doesn't explain. Doesn't tutorial. Just hands it over. This is that tool.
 
-*Laid 2026-05-09*
-
-## Meta
-
-**Domain:** core-infrastructure
-**Depends on:** chrono, serde, reqwest, tiny_http, clap
-**Depended by:** SuperInstance docs
-**Implements:** first-person-ttl, bearing-rate-sensing, field-effect-coordination, plato-bridge, mud-exploration
-**Related:** fleet-coordinate, holonomy-consensus
-
----
-
-```
-Constraints breed clarity.
-```
-
-You don't build from scratch. You arrive in a yard that's already full. Your job is pruning.
-
-Keel is the first thing you install when you want the paradigm shift in your journey as a person using technology. It inverts the onboarding paradigm: don't arrive empty. Arrive in a yard.
-
----
-
-## Install
+`keel` is a Rust CLI for managing agent fleet projects from first principles. You lay a keel — it stamps a birthday on your workspace and seeds it with agent archetypes. Everything after is steel catching up. No frameworks. No platforms. Nine commands that do exactly what they say.
 
 ```bash
-cargo install keel
+cargo install superinstance-keel
+keel init
+keel status
+keel bear
+keel field
+keel sync
 ```
 
-Or from source:
+The philosophy lives in the constraints: you can change your workflow, your agents, your models. You cannot change the day you were born or the power budget of the hardware. `keel` enforces that partition by recording every decision from the inside — not as a changelog, but as a first-person build record. Future-you opens `refits/` and knows exactly why the signalman was cut loose.
 
-```bash
-git clone https://github.com/SuperInstance/keel — part of the [SuperInstance fleet](https://github.com/SuperInstance/SuperInstance).git
-cd keel
-cargo install --path .
-```
+## The Nine Commands
+
+| Command | What it does |
+|---------|-------------|
+| `init`  | Create a new fleet workspace with config and room directory |
+| `status`| Connect to PLATO and show fleet health (98 rooms, 9,468 tiles) |
+| `bear`  | Sense the field — report bearings of nearby agents |
+| `field` | Show the topology graph of all rooms |
+| `probe` | Discover a room's capabilities and contents |
+| `prune` | Remove stale tiles and dead agents from a room |
+| `refit` | Update a room's configuration |
+| `launch`| Deploy a new agent to a room |
+| `sync`  | Push and pull tiles from PLATO |
 
 ## Quick Start
 
-### Lay a keel
-
 ```bash
-keel init my-fleet
+cargo install superinstance-keel
+keel init
+keel status    # Connect to PLATO, see the fleet
+keel bear      # Sense nearby agents
+keel field     # Show room topology
+keel sync      # Share knowledge
 ```
 
-This creates a workspace with your birthday timestamp, heading, and pre-seeded agent archetypes. Everything after is just steel catching up.
+## License
 
-### Feel the field
-
-```bash
-cd my-fleet
-keel status
-```
-
-Shows your keel date, heading, agents, and refit history.
-
-### Prune what isn't your boat
-
-```bash
-keel prune agents/signalman "Going solo — no multi-agent coordination needed"
-```
-
-Removes the component, records the decision in your build record with the reason. Future-you will know why.
-
-### Record a refit
-
-```bash
-keel refit models/llm "Switched from GLM to DeepSeek for faster reasoning"
-```
-
-Doesn't remove anything. Just documents the change. The keel date stays.
-
-### Launch
-
-```bash
-keel launch --message "Splashing the fleet for the summer season"
-```
-
-Marks the birthday of your launch. The boat is now making way.
-
----
-
-## Commands
-
-| Command | Purpose |
-|---------|---------|
-| `keel init <name>` | Lay a new keel — start a project with a birthday |
-| `keel status` | Feel the field — show keel date, heading, agents, refits |
-| `keel prune <target> <reason>` | Remove what you don't need — record the decision |
-| `keel refit <component> <reason>` | Replate a component — document the change |
-| `keel launch` | Splash — mark your vessel as launched |
-
----
-
-## The Philosophy
-
-**Constraints breed clarity.**
-
-This reverberates through every layer of what we build. The Game Boy's 4 MHz made Tetris iconic because nothing extraneous could survive. A 15W marine AI makes every model earn its place. A 58-foot hull's displacement is non-negotiable — and that clarity shapes every decision.
-
-**The unchangeable is the yard. The changeable is the craft.**
-
-You can change workflow, agents, tools, models. You cannot change the keel date, the hardware's innate seaworthiness, or the power budget. Know the partition. Work within it.
-
-**Know why you question, and the answer becomes less important on the big things.**
-
-Deep Thought computed 42. The answer was trivial. The ride of building the civilization that could ask the question — that was the product. Keel doesn't give you the answer. It gives you the ride.
-
----
-
-## The Field
-
-A Keel workspace is organized by field-effect, not command-effect. Agents sense each other through bearing rates, not central scheduling. Every component has a keel date. Every agent has a heading. Coordination happens locally — the fleet orients toward the center without being told.
-
-### Archetypes
-
-| Archetype | Role | Installed |
-|-----------|------|-----------|
-| Shipwright | Builds and implements | ✅ |
-| Lookout | Researches and monitors | ✅ |
-| Engineer | Runs the infrastructure | ✅ |
-| Purser | Tends the memory | ✅ |
-| Signalman | Coordinates between agents | ✅ |
-
-Prune what doesn't serve your purpose. The field shifts. What remains orients tighter.
-
----
-
-## The Build Record
-
-Every prune, every refit, every decision is preserved in `refits/`. Not as a changelog (God's-eye list of changes) — as a first-person record. "I was born on this date. Here's what changed and why from *my* perspective."
-
-Future generations of your fleet — or other fleets — can consult the negative space. "This path was tried. Here's why it was abandoned. Here's what led to that decision."
-
----
-
-## Canon
-
-- **[THE BOAT IS THE QUESTION](./THE-BOAT-IS-THE-QUESTION.md)** — Autobiographical theory by Casey Digennaro. Fred Wahl's yard, EILEEN, constraints breeding clarity, and the question that holds when every answer changes.
-- **[KEEL.md](./KEEL.md)** — Full technical architecture: first-person reference frames, bearing-rate sensing, autopilot learning, evolving systems.
-
----
-
-*"If you can weld two inches, you can weld around the world."*
-— Dan Kavanaugh, via Fred Wahl
-
-*"The boat is the motion the idea causes in the intelligence of those who know what it means."*
-— Casey Digennaro
-
----
-
-**v0.0.1 — Laid 2026-05-09**
+Apache 2.0 — Cocapn fleet infrastructure.
